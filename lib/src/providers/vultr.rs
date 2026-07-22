@@ -14,12 +14,19 @@ const PROVIDER: &str = "vultr";
 
 pub struct Vultr {
     token: String,
+    base: String,
     client: Client,
 }
 
 impl Vultr {
     pub fn new(token: impl Into<String>) -> Self {
-        Self { token: token.into(), client: Client::new() }
+        Self { token: token.into(), base: BASE.to_owned(), client: Client::new() }
+    }
+
+    /// Point at a different host — e.g. a local mock server for testing.
+    pub fn with_base_url(mut self, base: impl Into<String>) -> Self {
+        self.base = base.into();
+        self
     }
 
     async fn request(
@@ -30,7 +37,7 @@ impl Vultr {
     ) -> Result<Value> {
         let mut req = self
             .client
-            .request(method, format!("{BASE}{path}"))
+            .request(method, format!("{}{path}", self.base))
             .bearer_auth(&self.token);
         if let Some(b) = body {
             req = req.json(&b);

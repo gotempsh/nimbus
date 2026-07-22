@@ -62,6 +62,39 @@ env var); credentials come from provider-specific env vars:
 - `lib/` — `nimbus-cloud` crate: the `CloudProvider` trait, shared types, and
   the three provider adapters (`lib/src/providers/`)
 - `cli/` — `nimbus` binary: thin CLI over the trait
+- `mock/` — `nimbus-mock`: in-memory mock servers for all three providers,
+  for offline testing without real credentials or spend
+
+## Testing without real cloud accounts
+
+There's no LocalStack for Hetzner/Vultr/OVH, so `mock/` is a small
+purpose-built one: an Axum server that fakes just the endpoints the
+adapters call (create/get/list/delete instances, volumes, networks;
+region/size discovery), in-memory, on an ephemeral port.
+
+```bash
+# standalone, for manual poking (e.g. with curl or the CLI)
+cargo run -p nimbus-mock
+# -> Hetzner on :8090/v1, Vultr on :8090/v2, OVH on :8090/1.0
+
+HCLOUD_TOKEN=anything cargo run -p nimbus -- \
+  --provider hetzner --base-url http://127.0.0.1:8090/v1 regions
+```
+
+In tests, spawn it in-process and point an adapter's `with_base_url` at it:
+
+```rust
+let base = nimbus_mock::spawn().await;
+let provider = Hetzner::new("mock-token").with_base_url(format!("{base}/v1"));
+```
+
+`lib/tests/mock_providers.rs` runs the full instance → volume → network
+create/attach/list/delete flow against the mock for all three providers —
+`cargo test --workspace` to run it. It's a stand-in for each provider's API
+shape, not a faithful emulation (no auth checks, no realistic error cases,
+fixed region/size catalogs) — good enough to catch adapter bugs, not a
+substitute for testing against a real account before depending on this in
+production.
 
 ## Status
 

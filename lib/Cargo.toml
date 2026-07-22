@@ -19,3 +19,4 @@ hex = "0.4"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+nimbus-mock = { path = "../mock" }

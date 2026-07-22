@@ -11,7 +11,12 @@ use std::sync::Arc;
 struct Cli {
     /// hetzner | vultr | ovh
     #[arg(long, global = true, env = "NIMBUS_PROVIDER")]
-    provider: String,
+    provider: Option<String>,
+
+    /// Override the provider's API root — e.g. http://127.0.0.1:8090/v1 to
+    /// target `nimbus-mock` instead of the real Hetzner/Vultr/OVH API.
+    #[arg(long, global = true, env = "NIMBUS_BASE_URL")]
+    base_url: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -82,17 +87,26 @@ fn env(key: &str) -> Result<String> {
     std::env::var(key).map_err(|_| anyhow!("missing required env var {key}"))
 }
 
-fn build_provider(id: &str) -> Result<Arc<dyn CloudProvider>> {
+fn build_provider(id: &str, base_url: Option<String>) -> Result<Arc<dyn CloudProvider>> {
     Ok(match id {
-        "hetzner" => Arc::new(Hetzner::new(env("HCLOUD_TOKEN")?)),
-        "vultr" => Arc::new(Vultr::new(env("VULTR_API_KEY")?)),
-        "ovh" => Arc::new(Ovh::new(
-            OvhRegion::Eu,
-            env("OVH_APPLICATION_KEY")?,
-            env("OVH_APPLICATION_SECRET")?,
-            env("OVH_CONSUMER_KEY")?,
-            env("OVH_PROJECT_ID")?,
-        )),
+        "hetzner" => {
+            let p = Hetzner::new(env("HCLOUD_TOKEN")?);
+            Arc::new(if let Some(b) = base_url { p.with_base_url(b) } else { p })
+        }
+        "vultr" => {
+            let p = Vultr::new(env("VULTR_API_KEY")?);
+            Arc::new(if let Some(b) = base_url { p.with_base_url(b) } else { p })
+        }
+        "ovh" => {
+            let p = Ovh::new(
+                OvhRegion::Eu,
+                env("OVH_APPLICATION_KEY")?,
+                env("OVH_APPLICATION_SECRET")?,
+                env("OVH_CONSUMER_KEY")?,
+                env("OVH_PROJECT_ID")?,
+            );
+            Arc::new(if let Some(b) = base_url { p.with_base_url(b) } else { p })
+        }
         other => return Err(anyhow!("unknown provider '{other}' (expected hetzner, vultr, or ovh)")),
     })
 }
@@ -105,7 +119,8 @@ fn print_json<T: serde::Serialize>(v: &T) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let provider = build_provider(&cli.provider)?;
+    let provider_id = cli.provider.ok_or_else(|| anyhow!("--provider is required (hetzner, vultr, or ovh)"))?;
+    let provider = build_provider(&provider_id, cli.base_url)?;
 
     match cli.command {
         Command::Regions => print_json(&provider.regions().await?)?,

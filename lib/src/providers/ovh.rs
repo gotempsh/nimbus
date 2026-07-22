@@ -59,6 +59,14 @@ impl Ovh {
         }
     }
 
+    /// Point at a different host — e.g. a local mock server for testing.
+    /// Signing still runs against the real URL scheme, so a mock server
+    /// must accept requests without verifying `X-Ovh-Signature`.
+    pub fn with_base_url(mut self, base: impl Into<String>) -> Self {
+        self.endpoint = base.into();
+        self
+    }
+
     fn sign(&self, method: &str, url: &str, body: &str, timestamp: u64) -> String {
         // OVH signature: SHA1(AS+"+"+CK+"+"+METHOD+"+"+URL+"+"+BODY+"+"+TS)
         let payload =
