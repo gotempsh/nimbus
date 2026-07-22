@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use nimbus_cloud::{
-    providers::{Hetzner, Ovh, OvhRegion, Vultr},
+    providers::{DigitalOcean, Hetzner, Linode, Ovh, OvhRegion, Scaleway, Vultr},
     CloudProvider, CreateInstance, CreateNetwork, CreateVolume,
 };
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use std::sync::Arc;
     about = "One CLI for instance/storage/network provisioning across clouds"
 )]
 struct Cli {
-    /// hetzner | vultr | ovh
+    /// hetzner | vultr | ovh | digitalocean | scaleway | linode
     #[arg(long, global = true, env = "NIMBUS_PROVIDER")]
     provider: Option<String>,
 
@@ -135,9 +135,37 @@ fn build_provider(id: &str, base_url: Option<String>) -> Result<Arc<dyn CloudPro
                 p
             })
         }
+        "digitalocean" | "do" => {
+            let p = DigitalOcean::new(env("DIGITALOCEAN_TOKEN")?);
+            Arc::new(if let Some(b) = base_url {
+                p.with_base_url(b)
+            } else {
+                p
+            })
+        }
+        "scaleway" => {
+            let p = Scaleway::new(
+                env("SCW_SECRET_KEY")?,
+                env("SCW_DEFAULT_PROJECT_ID")?,
+                std::env::var("SCW_DEFAULT_ZONE").unwrap_or_else(|_| "fr-par-1".into()),
+            );
+            Arc::new(if let Some(b) = base_url {
+                p.with_base_url(b)
+            } else {
+                p
+            })
+        }
+        "linode" => {
+            let p = Linode::new(env("LINODE_TOKEN")?);
+            Arc::new(if let Some(b) = base_url {
+                p.with_base_url(b)
+            } else {
+                p
+            })
+        }
         other => {
             return Err(anyhow!(
-                "unknown provider '{other}' (expected hetzner, vultr, or ovh)"
+                "unknown provider '{other}' (expected hetzner, vultr, ovh, digitalocean, scaleway, or linode)"
             ))
         }
     })
@@ -151,9 +179,9 @@ fn print_json<T: serde::Serialize>(v: &T) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let provider_id = cli
-        .provider
-        .ok_or_else(|| anyhow!("--provider is required (hetzner, vultr, or ovh)"))?;
+    let provider_id = cli.provider.ok_or_else(|| {
+        anyhow!("--provider is required (hetzner, vultr, ovh, digitalocean, scaleway, or linode)")
+    })?;
     let provider = build_provider(&provider_id, cli.base_url)?;
 
     match cli.command {

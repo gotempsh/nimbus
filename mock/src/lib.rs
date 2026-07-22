@@ -4,22 +4,27 @@
 //! emulation of either API — just the fields and status codes the nimbus
 //! clients actually read.
 
+mod digitalocean;
 mod hetzner;
+mod linode;
 mod ovh;
+mod scaleway;
 mod vultr;
 
 use axum::Router;
 
-/// Router serving all three mocks on distinct path prefixes
-/// (`/v1` Hetzner, `/v2` Vultr, `/1.0` OVH) so one bound port covers all
-/// three providers — point each adapter's `with_base_url` at
-/// `http://127.0.0.1:<port>` plus the provider's own path prefix removed
-/// (each adapter already appends its own version prefix).
+/// Router serving all provider mocks on distinct path prefixes so one bound
+/// port covers everything: `/v1` Hetzner, `/v2` Vultr, `/1.0` OVH,
+/// `/do/v2` DigitalOcean (Vultr owns the bare `/v2`), `/v4` Linode, and
+/// Scaleway's full `/instance/v1`···`/iam`···`/vpc` paths.
 pub fn router() -> Router {
     Router::new()
         .merge(hetzner::router())
         .merge(vultr::router())
         .merge(ovh::router())
+        .merge(digitalocean::router())
+        .merge(linode::router())
+        .merge(scaleway::router())
 }
 
 /// Binds an ephemeral local port and serves `router()` in the background.

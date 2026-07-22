@@ -3,7 +3,7 @@
 //! cloud account or spending money.
 
 use nimbus_cloud::{
-    providers::{Hetzner, Ovh, OvhRegion, Vultr},
+    providers::{DigitalOcean, Hetzner, Linode, Ovh, OvhRegion, Scaleway, Vultr},
     CloudProvider, CreateInstance, CreateNetwork, CreateVolume,
 };
 
@@ -134,4 +134,31 @@ async fn ovh_full_flow() {
     )
     .with_base_url(format!("{base}/1.0"));
     exercise(&provider, "GRA", "d2-2", "ubuntu-24.04").await;
+}
+
+#[tokio::test]
+async fn digitalocean_full_flow() {
+    let base = nimbus_mock::spawn().await;
+    let provider = DigitalOcean::new("mock-token").with_base_url(format!("{base}/do/v2"));
+    exercise(&provider, "nyc3", "s-1vcpu-1gb", "ubuntu-24-04-x64").await;
+}
+
+#[tokio::test]
+async fn linode_full_flow() {
+    let base = nimbus_mock::spawn().await;
+    let provider = Linode::new("mock-token").with_base_url(format!("{base}/v4"));
+    exercise(&provider, "us-east", "g6-nanode-1", "linode/ubuntu24.04").await;
+}
+
+#[tokio::test]
+async fn scaleway_full_flow() {
+    let base = nimbus_mock::spawn().await;
+    let provider = Scaleway::new("mock-secret", "test-project", "fr-par-1").with_base_url(base);
+    exercise(
+        &provider,
+        "fr-par-1",
+        "DEV1-S",
+        "11111111-2222-3333-4444-555555555555",
+    )
+    .await;
 }
