@@ -75,7 +75,18 @@ async fn create_ssh_key(State(store): S, Json(body): Json<Value>) -> Json<Value>
     Json(json!({ "ssh_key": { "id": id, "name": body["name"], "public_key": body["public_key"] } }))
 }
 
-async fn create_server(State(store): S, Json(body): Json<Value>) -> Json<Value> {
+async fn create_server(
+    State(store): S,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if body["server_type"].as_str() != Some("cx22") {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(
+                json!({ "error": { "code": "invalid_input", "message": "server type not found" } }),
+            ),
+        ));
+    }
     let id = store.id();
     let record = json!({
         "id": id,
@@ -87,7 +98,7 @@ async fn create_server(State(store): S, Json(body): Json<Value>) -> Json<Value> 
         "private_net": [],
     });
     store.servers.lock().unwrap().insert(id, record.clone());
-    Json(json!({ "server": record }))
+    Ok(Json(json!({ "server": record })))
 }
 
 async fn get_server(State(store): S, Path(id): Path<u64>) -> Result<Json<Value>, StatusCode> {

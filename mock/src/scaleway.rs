@@ -92,7 +92,13 @@ async fn create_server(
     State(store): S,
     Path(zone): Path<String>,
     Json(body): Json<Value>,
-) -> Json<Value> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if body["commercial_type"].as_str() != Some("DEV1-S") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "message": "commercial type not found", "type": "unknown_resource" })),
+        ));
+    }
     let id = Uuid::new_v4().to_string();
     let record = json!({
         "id": id,
@@ -104,7 +110,7 @@ async fn create_server(
         "private_ip": Value::Null,
     });
     store.servers.lock().unwrap().insert(id, record.clone());
-    Json(json!({ "server": record }))
+    Ok(Json(json!({ "server": record })))
 }
 
 async fn get_server(

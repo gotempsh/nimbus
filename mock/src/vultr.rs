@@ -69,7 +69,16 @@ async fn create_ssh_key(Json(body): Json<Value>) -> Json<Value> {
     )
 }
 
-async fn create_instance(State(store): S, Json(body): Json<Value>) -> Json<Value> {
+async fn create_instance(
+    State(store): S,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if body["plan"].as_str() != Some("vc2-1c-1gb") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid plan.", "status": 400 })),
+        ));
+    }
     let id = Uuid::new_v4().to_string();
     let record = json!({
         "id": id,
@@ -82,7 +91,7 @@ async fn create_instance(State(store): S, Json(body): Json<Value>) -> Json<Value
         "internal_ip": if body.get("attach_vpc").is_some() { "10.1.0.5" } else { "" },
     });
     store.instances.lock().unwrap().insert(id, record.clone());
-    Json(json!({ "instance": record }))
+    Ok(Json(json!({ "instance": record })))
 }
 
 async fn get_instance(State(store): S, Path(id): Path<String>) -> Result<Json<Value>, StatusCode> {

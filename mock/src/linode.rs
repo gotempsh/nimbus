@@ -75,7 +75,16 @@ async fn images() -> Json<Value> {
     ]}))
 }
 
-async fn create_instance(State(store): S, Json(body): Json<Value>) -> Json<Value> {
+async fn create_instance(
+    State(store): S,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if body["type"].as_str() != Some("g6-nanode-1") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "errors": [{ "field": "type", "reason": "type is not valid" }] })),
+        ));
+    }
     let id = store.id();
     let record = json!({
         "id": id,
@@ -86,7 +95,7 @@ async fn create_instance(State(store): S, Json(body): Json<Value>) -> Json<Value
         "ipv4": [format!("172.105.7.{}", id % 250 + 1), "192.168.129.10"],
     });
     store.instances.lock().unwrap().insert(id, record.clone());
-    Json(record)
+    Ok(Json(record))
 }
 
 async fn get_instance(State(store): S, Path(id): Path<u64>) -> Result<Json<Value>, StatusCode> {

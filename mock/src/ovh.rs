@@ -88,7 +88,16 @@ async fn create_sshkey(State(store): S, Json(body): Json<Value>) -> Json<Value> 
     Json(json!({ "id": id, "name": body["name"], "publicKey": body["publicKey"] }))
 }
 
-async fn create_instance(State(store): S, Json(body): Json<Value>) -> Json<Value> {
+async fn create_instance(
+    State(store): S,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if body["flavorId"].as_str() != Some("d2-2") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "message": "Invalid flavorId" })),
+        ));
+    }
     let id = store.id();
     let record = json!({
         "id": id.to_string(),
@@ -99,7 +108,7 @@ async fn create_instance(State(store): S, Json(body): Json<Value>) -> Json<Value
         "ipAddresses": [{ "type": "public", "ip": format!("51.75.{}.10", id % 254) }],
     });
     store.instances.lock().unwrap().insert(id, record.clone());
-    Json(record)
+    Ok(Json(record))
 }
 
 async fn get_instance(

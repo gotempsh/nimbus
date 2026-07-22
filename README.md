@@ -101,12 +101,17 @@ let provider = Hetzner::new("mock-token").with_base_url(format!("{base}/v1"));
 ```
 
 `lib/tests/mock_providers.rs` runs the full instance → volume → network
-create/attach/list/delete flow against the mock for every provider —
-`cargo test --workspace` to run it. It's a stand-in for each provider's API
-shape, not a faithful emulation (no auth checks, no realistic error cases,
-fixed region/size catalogs) — good enough to catch adapter bugs, not a
-substitute for testing against a real account before depending on this in
-production.
+create/attach/list/delete flow against the mock for every provider, and
+`lib/tests/mock_providers_unhappy.rs` covers the failure paths: rejected
+credentials (any missing token or the sentinel `bad-token` → 401 →
+`Error::Auth`), unknown resource ids (404), create-time validation errors
+(each provider's real error status and body shape, surfaced in
+`Error::Api`), and unreachable hosts (`Error::Transport`).
+`cargo test --workspace` runs everything. The mock is a stand-in for each
+provider's API shape, not a faithful emulation (fixed catalogs, no
+pagination/rate limits, instant state transitions) — good enough to catch
+adapter bugs, not a substitute for testing against a real account before
+depending on this in production.
 
 ## Status
 

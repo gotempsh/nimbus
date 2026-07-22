@@ -84,7 +84,18 @@ async fn list_keys() -> Json<Value> {
     Json(json!({ "ssh_keys": [] }))
 }
 
-async fn create_droplet(State(store): S, Json(body): Json<Value>) -> Json<Value> {
+async fn create_droplet(
+    State(store): S,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if body["size"].as_str() != Some("s-1vcpu-1gb") {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(
+                json!({ "id": "unprocessable_entity", "message": "You specified an invalid size for Droplet creation." }),
+            ),
+        ));
+    }
     let id = store.id();
     let record = json!({
         "id": id,
@@ -97,7 +108,7 @@ async fn create_droplet(State(store): S, Json(body): Json<Value>) -> Json<Value>
         ]},
     });
     store.droplets.lock().unwrap().insert(id, record.clone());
-    Json(json!({ "droplet": record }))
+    Ok(Json(json!({ "droplet": record })))
 }
 
 async fn get_droplet(State(store): S, Path(id): Path<u64>) -> Result<Json<Value>, StatusCode> {
