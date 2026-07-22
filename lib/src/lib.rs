@@ -19,6 +19,13 @@ pub trait CloudProvider: Send + Sync {
     // -- discovery -----------------------------------------------------
     async fn regions(&self) -> Result<Vec<Region>>;
     async fn instance_types(&self, region: &str) -> Result<Vec<InstanceType>>;
+    async fn images(&self, region: &str) -> Result<Vec<Image>>;
+
+    /// Cheap authenticated call — lets callers fail fast on a bad or
+    /// mis-scoped credential before storing it or enqueueing work.
+    async fn verify(&self) -> Result<()> {
+        self.regions().await.map(|_| ())
+    }
 
     // -- instances -------------------------------------------------------
     async fn create_instance(&self, req: CreateInstance) -> Result<Instance>;

@@ -16,9 +16,21 @@ pub struct InstanceType {
     pub vcpus: u32,
     pub memory_gb: f32,
     pub disk_gb: u32,
-    /// Gross monthly price in USD. Providers billing hourly are normalized
-    /// to a 730h month so prices are comparable across backends.
-    pub monthly_usd: f64,
+    /// Gross monthly price in `currency`. Providers billing hourly are
+    /// normalized to a 730h month so prices are comparable across backends.
+    pub monthly_price: f64,
+    /// ISO 4217 code of `monthly_price` — providers bill in different
+    /// currencies (Hetzner EUR, Vultr USD) and pretending otherwise would
+    /// misprice by the FX spread.
+    pub currency: String,
+}
+
+/// A bootable OS image, discovered per region.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Image {
+    /// Provider-specific identifier to pass as `CreateInstance.image`.
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +57,10 @@ pub struct Instance {
     /// May be empty until the provider assigns one.
     pub public_ipv4: Option<String>,
     pub private_ipv4: Option<String>,
+    /// Default login user for the image family the adapter provisions
+    /// (root on Hetzner/Vultr; ubuntu on OVH Ubuntu images).
+    pub ssh_user: String,
+    pub ssh_port: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

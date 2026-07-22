@@ -4,8 +4,8 @@
 //! (`serviceName`). Endpoint is regional: eu/ca/us — default eu.
 
 use crate::{
-    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Instance, InstanceStatus,
-    InstanceType, Network, Region, Result, Volume,
+    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
+    InstanceStatus, InstanceType, Network, Region, Result, Volume,
 };
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
@@ -148,6 +148,10 @@ fn parse_instance(v: &Value) -> Instance {
         status: instance_status(v["status"].as_str().unwrap_or_default()),
         public_ipv4: ip_of("public"),
         private_ipv4: ip_of("private"),
+        // OVH Ubuntu images disable root login; the image's default sudo
+        // user is "ubuntu". Other distros differ (debian, centos, ...).
+        ssh_user: "ubuntu".to_owned(),
+        ssh_port: 22,
     }
 }
 
@@ -182,7 +186,21 @@ impl CloudProvider for Ovh {
                 disk_gb: f["disk"].as_u64().unwrap_or_default() as u32,
                 // OVH flavor pricing needs a separate /price catalog call;
                 // left at 0.0 until that's wired up (tracked follow-up).
-                monthly_usd: 0.0,
+                monthly_price: 0.0,
+                currency: "EUR".to_owned(),
+            })
+            .collect())
+    }
+
+    async fn images(&self, region: &str) -> Result<Vec<Image>> {
+        let v = self.get(&self.project_path(&format!("/image?region={region}&osType=linux"))).await?;
+        Ok(v.as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| Image {
+                id: i["id"].as_str().unwrap_or_default().to_owned(),
+                name: i["name"].as_str().unwrap_or_default().to_owned(),
             })
             .collect())
     }

@@ -15,6 +15,12 @@ async fn exercise(provider: &dyn CloudProvider, region: &str, instance_type: &st
 
     let types = provider.instance_types(region).await.expect("instance_types");
     assert!(!types.is_empty(), "{}: expected at least one instance type", provider.id());
+    assert!(!types[0].currency.is_empty(), "{}: instance type must carry a currency", provider.id());
+
+    let images = provider.images(region).await.expect("images");
+    assert!(!images.is_empty(), "{}: expected at least one image", provider.id());
+
+    provider.verify().await.expect("verify");
 
     let instance = provider
         .create_instance(CreateInstance {

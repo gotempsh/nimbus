@@ -26,6 +26,7 @@ pub fn router() -> Router {
         .route("/v2/regions", get(regions))
         .route("/v2/regions/{id}/availability", get(availability))
         .route("/v2/plans", get(plans))
+        .route("/v2/os", get(os_list))
         .route("/v2/ssh-keys", post(create_ssh_key))
         .route("/v2/instances", post(create_instance).get(list_instances))
         .route("/v2/instances/{id}", get(get_instance).delete(delete_instance))
@@ -49,6 +50,13 @@ async fn availability() -> Json<Value> {
 async fn plans() -> Json<Value> {
     Json(json!({ "plans": [
         { "id": "vc2-1c-1gb", "vcpu_count": 1, "ram": 1024, "disk": 25, "monthly_cost": 6.0 }
+    ]}))
+}
+
+async fn os_list() -> Json<Value> {
+    Json(json!({ "os": [
+        { "id": 2284, "name": "Ubuntu 24.04 LTS x64" },
+        { "id": 2136, "name": "Debian 12 x64" },
     ]}))
 }
 

@@ -2,8 +2,8 @@
 //! Flat REST + bearer token, no request signing.
 
 use crate::{
-    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Instance, InstanceStatus,
-    InstanceType, Network, Region, Result, Volume,
+    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
+    InstanceStatus, InstanceType, Network, Region, Result, Volume,
 };
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
@@ -83,6 +83,8 @@ fn parse_instance(v: &Value) -> Instance {
             .and_then(|a| a.first())
             .and_then(|n| n["ip"].as_str())
             .map(str::to_owned),
+        ssh_user: "root".to_owned(),
+        ssh_port: 22,
     }
 }
 
@@ -120,7 +122,7 @@ impl CloudProvider for Hetzner {
                     .iter()
                     .find(|p| p["location"].as_str() == Some(region))
                     .or_else(|| t["prices"].as_array().and_then(|a| a.first()))?;
-                let monthly_usd: f64 =
+                let monthly_price: f64 =
                     price["price_monthly"]["gross"].as_str().unwrap_or("0").parse().unwrap_or(0.0);
                 Some(InstanceType {
                     id: t["name"].as_str().unwrap_or_default().to_owned(),
@@ -128,21 +130,55 @@ impl CloudProvider for Hetzner {
                     vcpus: t["cores"].as_u64().unwrap_or_default() as u32,
                     memory_gb: t["memory"].as_f64().unwrap_or_default() as f32,
                     disk_gb: t["disk"].as_u64().unwrap_or_default() as u32,
-                    monthly_usd,
+                    monthly_price,
+                    currency: "EUR".to_owned(),
                 })
             })
             .collect())
     }
 
+    async fn images(&self, _region: &str) -> Result<Vec<Image>> {
+        // Hetzner system images are global, not per-region.
+        let v = self.get("/images?type=system&per_page=50").await?;
+        Ok(v["images"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|i| i["deprecated"].is_null())
+            .map(|i| Image {
+                id: i["name"].as_str().unwrap_or_default().to_owned(),
+                name: i["description"].as_str().unwrap_or_default().to_owned(),
+            })
+            .collect())
+    }
+
     async fn create_instance(&self, req: CreateInstance) -> Result<Instance> {
-        let sshkey = self
+        // Upload the key; on a uniqueness conflict (same key re-used across
+        // provisions) fall back to the existing upload instead of failing.
+        let key_id = match self
             .request(
                 reqwest::Method::POST,
                 "/ssh_keys",
                 Some(json!({ "name": format!("{}-key", req.name), "public_key": req.ssh_public_key })),
             )
-            .await?;
-        let key_id = sshkey["ssh_key"]["id"].clone();
+            .await
+        {
+            Ok(v) => v["ssh_key"]["id"].clone(),
+            Err(Error::Api { message, .. })
+                if message.contains("uniqueness") || message.contains("already") =>
+            {
+                let keys = self.get("/ssh_keys").await?;
+                keys["ssh_keys"]
+                    .as_array()
+                    .and_then(|a| {
+                        a.iter().find(|k| k["public_key"].as_str() == Some(req.ssh_public_key.trim()))
+                    })
+                    .map(|k| k["id"].clone())
+                    .ok_or_else(|| Error::InvalidRequest("hetzner: could not reuse existing ssh key".into()))?
+            }
+            Err(e) => return Err(e),
+        };
         let mut body = json!({
             "name": req.name,
             "server_type": req.instance_type,

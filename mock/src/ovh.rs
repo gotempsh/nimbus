@@ -38,6 +38,7 @@ pub fn router() -> Router {
     Router::new()
         .route(&format!("{P}/region"), get(regions))
         .route(&format!("{P}/flavor"), get(flavors))
+        .route(&format!("{P}/image"), get(images))
         .route(&format!("{P}/sshkey"), post(create_sshkey))
         .route(&format!("{P}/instance"), post(create_instance).get(list_instances))
         .route(&format!("{P}/instance/{{id}}"), get(get_instance).delete(delete_instance))
@@ -57,6 +58,13 @@ async fn regions() -> Json<Value> {
 async fn flavors(Query(_params): Query<HashMap<String, String>>) -> Json<Value> {
     Json(json!([
         { "id": "d2-2", "name": "d2-2", "vcpus": 2, "ram": 4096, "disk": 50, "osType": "linux" }
+    ]))
+}
+
+async fn images(Query(_params): Query<HashMap<String, String>>) -> Json<Value> {
+    Json(json!([
+        { "id": "b5f47e0a-1111-4a3b-9d63-example00001", "name": "Ubuntu 24.04" },
+        { "id": "b5f47e0a-2222-4a3b-9d63-example00002", "name": "Debian 12" },
     ]))
 }
 

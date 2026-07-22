@@ -34,6 +34,7 @@ pub fn router() -> Router {
     Router::new()
         .route("/v1/locations", get(locations))
         .route("/v1/server_types", get(server_types))
+        .route("/v1/images", get(images))
         .route("/v1/ssh_keys", post(create_ssh_key))
         .route("/v1/servers", post(create_server).get(list_servers))
         .route("/v1/servers/{id}", get(get_server).delete(delete_server))
@@ -59,6 +60,13 @@ async fn server_types() -> Json<Value> {
             "name": "cx22", "description": "2 vCPU / 4GB", "cores": 2, "memory": 4.0, "disk": 40,
             "prices": [{ "location": "fsn1", "price_monthly": { "gross": "4.35" } }],
         }
+    ]}))
+}
+
+async fn images() -> Json<Value> {
+    Json(json!({ "images": [
+        { "name": "ubuntu-24.04", "description": "Ubuntu 24.04", "deprecated": null },
+        { "name": "debian-12", "description": "Debian 12", "deprecated": null },
     ]}))
 }
 

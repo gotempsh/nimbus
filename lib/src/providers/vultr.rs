@@ -2,8 +2,8 @@
 //! Flat REST + bearer token, no request signing.
 
 use crate::{
-    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Instance, InstanceStatus,
-    InstanceType, Network, Region, Result, Volume,
+    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
+    InstanceStatus, InstanceType, Network, Region, Result, Volume,
 };
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
@@ -88,6 +88,8 @@ fn parse_instance(v: &Value) -> Instance {
         ),
         public_ipv4: v["main_ip"].as_str().filter(|s| *s != "0.0.0.0").map(str::to_owned),
         private_ipv4: v["internal_ip"].as_str().filter(|s| !s.is_empty()).map(str::to_owned),
+        ssh_user: "root".to_owned(),
+        ssh_port: 22,
     }
 }
 
@@ -137,7 +139,23 @@ impl CloudProvider for Vultr {
                 vcpus: p["vcpu_count"].as_u64().unwrap_or_default() as u32,
                 memory_gb: p["ram"].as_f64().unwrap_or_default() as f32 / 1024.0,
                 disk_gb: p["disk"].as_u64().unwrap_or_default() as u32,
-                monthly_usd: p["monthly_cost"].as_f64().unwrap_or_default(),
+                monthly_price: p["monthly_cost"].as_f64().unwrap_or_default(),
+                currency: "USD".to_owned(),
+            })
+            .collect())
+    }
+
+    async fn images(&self, _region: &str) -> Result<Vec<Image>> {
+        // Vultr OS catalog is global; ids are numeric os_id values.
+        let v = self.get("/os").await?;
+        Ok(v["os"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|o| Image {
+                id: o["id"].to_string(),
+                name: o["name"].as_str().unwrap_or_default().to_owned(),
             })
             .collect())
     }
