@@ -16,7 +16,10 @@ use axum::Router;
 /// `http://127.0.0.1:<port>` plus the provider's own path prefix removed
 /// (each adapter already appends its own version prefix).
 pub fn router() -> Router {
-    Router::new().merge(hetzner::router()).merge(vultr::router()).merge(ovh::router())
+    Router::new()
+        .merge(hetzner::router())
+        .merge(vultr::router())
+        .merge(ovh::router())
 }
 
 /// Binds an ephemeral local port and serves `router()` in the background.
@@ -24,10 +27,14 @@ pub fn router() -> Router {
 /// includes its own version segment (`/v1`, `/v2`, `/1.0`), so callers pass
 /// `with_base_url(format!("{root}/v1"))` etc. See `mock/README.md`.
 pub async fn spawn() -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind mock listener");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock listener");
     let addr = listener.local_addr().expect("local addr");
     tokio::spawn(async move {
-        axum::serve(listener, router()).await.expect("mock server crashed");
+        axum::serve(listener, router())
+            .await
+            .expect("mock server crashed");
     });
     format!("http://{addr}")
 }

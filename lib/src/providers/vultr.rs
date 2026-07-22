@@ -20,7 +20,11 @@ pub struct Vultr {
 
 impl Vultr {
     pub fn new(token: impl Into<String>) -> Self {
-        Self { token: token.into(), base: BASE.to_owned(), client: Client::new() }
+        Self {
+            token: token.into(),
+            base: BASE.to_owned(),
+            client: Client::new(),
+        }
     }
 
     /// Point at a different host — e.g. a local mock server for testing.
@@ -52,13 +56,20 @@ impl Vultr {
         }
         let text = resp.text().await?;
         if !status.is_success() {
-            return Err(Error::Api { provider: PROVIDER, status: status.as_u16(), message: text });
+            return Err(Error::Api {
+                provider: PROVIDER,
+                status: status.as_u16(),
+                message: text,
+            });
         }
         if text.is_empty() {
             return Ok(Value::Null);
         }
-        serde_json::from_str(&text)
-            .map_err(|e| Error::Api { provider: PROVIDER, status: status.as_u16(), message: e.to_string() })
+        serde_json::from_str(&text).map_err(|e| Error::Api {
+            provider: PROVIDER,
+            status: status.as_u16(),
+            message: e.to_string(),
+        })
     }
 
     async fn get(&self, path: &str) -> Result<Value> {
@@ -86,8 +97,14 @@ fn parse_instance(v: &Value) -> Instance {
             v["power_status"].as_str().unwrap_or_default(),
             v["status"].as_str().unwrap_or_default(),
         ),
-        public_ipv4: v["main_ip"].as_str().filter(|s| *s != "0.0.0.0").map(str::to_owned),
-        private_ipv4: v["internal_ip"].as_str().filter(|s| !s.is_empty()).map(str::to_owned),
+        public_ipv4: v["main_ip"]
+            .as_str()
+            .filter(|s| *s != "0.0.0.0")
+            .map(str::to_owned),
+        private_ipv4: v["internal_ip"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
         ssh_user: "root".to_owned(),
         ssh_port: 22,
     }
@@ -188,25 +205,38 @@ impl CloudProvider for Vultr {
         if let Some(net) = req.network_id {
             body["attach_vpc"] = json!([net]);
         }
-        let v = self.request(reqwest::Method::POST, "/instances", Some(body)).await?;
+        let v = self
+            .request(reqwest::Method::POST, "/instances", Some(body))
+            .await?;
         Ok(parse_instance(&v["instance"]))
     }
 
     async fn get_instance(&self, id: &str) -> Result<Instance> {
         let v = self.get(&format!("/instances/{id}")).await?;
         if v["instance"].is_null() {
-            return Err(Error::NotFound { provider: PROVIDER, resource: "instance", id: id.to_owned() });
+            return Err(Error::NotFound {
+                provider: PROVIDER,
+                resource: "instance",
+                id: id.to_owned(),
+            });
         }
         Ok(parse_instance(&v["instance"]))
     }
 
     async fn list_instances(&self) -> Result<Vec<Instance>> {
         let v = self.get("/instances").await?;
-        Ok(v["instances"].as_array().cloned().unwrap_or_default().iter().map(parse_instance).collect())
+        Ok(v["instances"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(parse_instance)
+            .collect())
     }
 
     async fn delete_instance(&self, id: &str) -> Result<()> {
-        self.request(reqwest::Method::DELETE, &format!("/instances/{id}"), None).await?;
+        self.request(reqwest::Method::DELETE, &format!("/instances/{id}"), None)
+            .await?;
         Ok(())
     }
 
@@ -227,7 +257,10 @@ impl CloudProvider for Vultr {
         };
         if let Some(instance_id) = req.instance_id {
             self.attach_volume(&vol.id, &instance_id).await?;
-            return Ok(Volume { attached_to: Some(instance_id), ..vol });
+            return Ok(Volume {
+                attached_to: Some(instance_id),
+                ..vol
+            });
         }
         Ok(vol)
     }
@@ -244,7 +277,10 @@ impl CloudProvider for Vultr {
                 name: b["label"].as_str().unwrap_or_default().to_owned(),
                 region: b["region"].as_str().unwrap_or_default().to_owned(),
                 size_gb: b["size_gb"].as_u64().unwrap_or_default() as u32,
-                attached_to: b["attached_to_instance"].as_str().filter(|s| !s.is_empty()).map(str::to_owned),
+                attached_to: b["attached_to_instance"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned),
             })
             .collect())
     }
@@ -260,12 +296,18 @@ impl CloudProvider for Vultr {
     }
 
     async fn detach_volume(&self, volume_id: &str) -> Result<()> {
-        self.request(reqwest::Method::POST, &format!("/blocks/{volume_id}/detach"), None).await?;
+        self.request(
+            reqwest::Method::POST,
+            &format!("/blocks/{volume_id}/detach"),
+            None,
+        )
+        .await?;
         Ok(())
     }
 
     async fn delete_volume(&self, id: &str) -> Result<()> {
-        self.request(reqwest::Method::DELETE, &format!("/blocks/{id}"), None).await?;
+        self.request(reqwest::Method::DELETE, &format!("/blocks/{id}"), None)
+            .await?;
         Ok(())
     }
 
@@ -274,13 +316,18 @@ impl CloudProvider for Vultr {
             .request(
                 reqwest::Method::POST,
                 "/vpcs",
-                Some(json!({ "region": req.region, "description": req.name, "v4_subnet_mask": 20,
-                    "v4_subnet": req.ip_range.split('/').next().unwrap_or("10.0.0.0") })),
+                Some(
+                    json!({ "region": req.region, "description": req.name, "v4_subnet_mask": 20,
+                    "v4_subnet": req.ip_range.split('/').next().unwrap_or("10.0.0.0") }),
+                ),
             )
             .await?;
         Ok(Network {
             id: v["vpc"]["id"].as_str().unwrap_or_default().to_owned(),
-            name: v["vpc"]["description"].as_str().unwrap_or_default().to_owned(),
+            name: v["vpc"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
             region: v["vpc"]["region"].as_str().unwrap_or_default().to_owned(),
             ip_range: req.ip_range,
         })
@@ -307,7 +354,8 @@ impl CloudProvider for Vultr {
     }
 
     async fn delete_network(&self, id: &str) -> Result<()> {
-        self.request(reqwest::Method::DELETE, &format!("/vpcs/{id}"), None).await?;
+        self.request(reqwest::Method::DELETE, &format!("/vpcs/{id}"), None)
+            .await?;
         Ok(())
     }
 }

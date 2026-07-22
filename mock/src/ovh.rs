@@ -40,14 +40,29 @@ pub fn router() -> Router {
         .route(&format!("{P}/flavor"), get(flavors))
         .route(&format!("{P}/image"), get(images))
         .route(&format!("{P}/sshkey"), post(create_sshkey))
-        .route(&format!("{P}/instance"), post(create_instance).get(list_instances))
-        .route(&format!("{P}/instance/{{id}}"), get(get_instance).delete(delete_instance))
-        .route(&format!("{P}/volume"), post(create_volume).get(list_volumes))
+        .route(
+            &format!("{P}/instance"),
+            post(create_instance).get(list_instances),
+        )
+        .route(
+            &format!("{P}/instance/{{id}}"),
+            get(get_instance).delete(delete_instance),
+        )
+        .route(
+            &format!("{P}/volume"),
+            post(create_volume).get(list_volumes),
+        )
         .route(&format!("{P}/volume/{{id}}"), delete(delete_volume))
         .route(&format!("{P}/volume/{{id}}/attach"), post(attach_volume))
         .route(&format!("{P}/volume/{{id}}/detach"), post(detach_volume))
-        .route(&format!("{P}/network/private"), post(create_network).get(list_networks))
-        .route(&format!("{P}/network/private/{{id}}"), delete(delete_network))
+        .route(
+            &format!("{P}/network/private"),
+            post(create_network).get(list_networks),
+        )
+        .route(
+            &format!("{P}/network/private/{{id}}"),
+            delete(delete_network),
+        )
         .with_state(store)
 }
 
@@ -91,11 +106,24 @@ async fn get_instance(
     State(store): S,
     Path((_sid, id)): Path<(String, u64)>,
 ) -> Result<Json<Value>, StatusCode> {
-    store.instances.lock().unwrap().get(&id).cloned().map(Json).ok_or(StatusCode::NOT_FOUND)
+    store
+        .instances
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 async fn list_instances(State(store): S) -> Json<Value> {
-    Json(json!(store.instances.lock().unwrap().values().cloned().collect::<Vec<_>>()))
+    Json(json!(store
+        .instances
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()))
 }
 
 async fn delete_instance(State(store): S, Path((_sid, id)): Path<(String, u64)>) -> StatusCode {
@@ -114,7 +142,13 @@ async fn create_volume(State(store): S, Json(body): Json<Value>) -> Json<Value> 
 }
 
 async fn list_volumes(State(store): S) -> Json<Value> {
-    Json(json!(store.volumes.lock().unwrap().values().cloned().collect::<Vec<_>>()))
+    Json(json!(store
+        .volumes
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()))
 }
 
 async fn attach_volume(
@@ -142,7 +176,11 @@ async fn delete_volume(State(store): S, Path((_sid, id)): Path<(String, u64)>) -
 
 async fn create_network(State(store): S, Json(body): Json<Value>) -> Json<Value> {
     let id = store.id();
-    let region = body["regions"].as_array().and_then(|a| a.first()).cloned().unwrap_or(Value::Null);
+    let region = body["regions"]
+        .as_array()
+        .and_then(|a| a.first())
+        .cloned()
+        .unwrap_or(Value::Null);
     let record = json!({
         "id": id.to_string(), "name": body["name"], "regions": [{ "region": region }],
     });
@@ -151,7 +189,13 @@ async fn create_network(State(store): S, Json(body): Json<Value>) -> Json<Value>
 }
 
 async fn list_networks(State(store): S) -> Json<Value> {
-    Json(json!(store.networks.lock().unwrap().values().cloned().collect::<Vec<_>>()))
+    Json(json!(store
+        .networks
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()))
 }
 
 async fn delete_network(State(store): S, Path((_sid, id)): Path<(String, u64)>) -> StatusCode {

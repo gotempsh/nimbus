@@ -11,14 +11,33 @@ const SSH_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest test@example.co
 
 async fn exercise(provider: &dyn CloudProvider, region: &str, instance_type: &str, image: &str) {
     let regions = provider.regions().await.expect("regions");
-    assert!(!regions.is_empty(), "{}: expected at least one region", provider.id());
+    assert!(
+        !regions.is_empty(),
+        "{}: expected at least one region",
+        provider.id()
+    );
 
-    let types = provider.instance_types(region).await.expect("instance_types");
-    assert!(!types.is_empty(), "{}: expected at least one instance type", provider.id());
-    assert!(!types[0].currency.is_empty(), "{}: instance type must carry a currency", provider.id());
+    let types = provider
+        .instance_types(region)
+        .await
+        .expect("instance_types");
+    assert!(
+        !types.is_empty(),
+        "{}: expected at least one instance type",
+        provider.id()
+    );
+    assert!(
+        !types[0].currency.is_empty(),
+        "{}: instance type must carry a currency",
+        provider.id()
+    );
 
     let images = provider.images(region).await.expect("images");
-    assert!(!images.is_empty(), "{}: expected at least one image", provider.id());
+    assert!(
+        !images.is_empty(),
+        "{}: expected at least one image",
+        provider.id()
+    );
 
     provider.verify().await.expect("verify");
 
@@ -35,31 +54,58 @@ async fn exercise(provider: &dyn CloudProvider, region: &str, instance_type: &st
         .await
         .expect("create_instance");
 
-    let fetched = provider.get_instance(&instance.id).await.expect("get_instance");
+    let fetched = provider
+        .get_instance(&instance.id)
+        .await
+        .expect("get_instance");
     assert_eq!(fetched.id, instance.id);
 
     let listed = provider.list_instances().await.expect("list_instances");
     assert!(listed.iter().any(|i| i.id == instance.id));
 
     let volume = provider
-        .create_volume(CreateVolume { name: "nimbus-vol".into(), region: region.into(), size_gb: 10, instance_id: None })
+        .create_volume(CreateVolume {
+            name: "nimbus-vol".into(),
+            region: region.into(),
+            size_gb: 10,
+            instance_id: None,
+        })
         .await
         .expect("create_volume");
-    provider.attach_volume(&volume.id, &instance.id).await.expect("attach_volume");
+    provider
+        .attach_volume(&volume.id, &instance.id)
+        .await
+        .expect("attach_volume");
     let volumes = provider.list_volumes().await.expect("list_volumes");
     assert!(volumes.iter().any(|v| v.id == volume.id));
-    provider.detach_volume(&volume.id).await.expect("detach_volume");
-    provider.delete_volume(&volume.id).await.expect("delete_volume");
+    provider
+        .detach_volume(&volume.id)
+        .await
+        .expect("detach_volume");
+    provider
+        .delete_volume(&volume.id)
+        .await
+        .expect("delete_volume");
 
     let network = provider
-        .create_network(CreateNetwork { name: "nimbus-net".into(), region: region.into(), ip_range: "10.0.0.0/16".into() })
+        .create_network(CreateNetwork {
+            name: "nimbus-net".into(),
+            region: region.into(),
+            ip_range: "10.0.0.0/16".into(),
+        })
         .await
         .expect("create_network");
     let networks = provider.list_networks().await.expect("list_networks");
     assert!(networks.iter().any(|n| n.id == network.id));
-    provider.delete_network(&network.id).await.expect("delete_network");
+    provider
+        .delete_network(&network.id)
+        .await
+        .expect("delete_network");
 
-    provider.delete_instance(&instance.id).await.expect("delete_instance");
+    provider
+        .delete_instance(&instance.id)
+        .await
+        .expect("delete_instance");
 }
 
 #[tokio::test]
@@ -79,7 +125,13 @@ async fn vultr_full_flow() {
 #[tokio::test]
 async fn ovh_full_flow() {
     let base = nimbus_mock::spawn().await;
-    let provider = Ovh::new(OvhRegion::Eu, "app-key", "app-secret", "consumer-key", "test-project")
-        .with_base_url(format!("{base}/1.0"));
+    let provider = Ovh::new(
+        OvhRegion::Eu,
+        "app-key",
+        "app-secret",
+        "consumer-key",
+        "test-project",
+    )
+    .with_base_url(format!("{base}/1.0"));
     exercise(&provider, "GRA", "d2-2", "ubuntu-24.04").await;
 }

@@ -1,4 +1,12 @@
-# nimbus
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" alt="nimbus" width="360">
+  </picture>
+</p>
+
+[![CI](https://github.com/gotempsh/nimbus/actions/workflows/ci.yml/badge.svg)](https://github.com/gotempsh/nimbus/actions/workflows/ci.yml)
+![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 
 One async trait for instance, block-storage, and network provisioning across
 cloud providers — Hetzner, Vultr, and OVHcloud today. Same call, same types,
@@ -110,8 +118,15 @@ unverified until that happens.
 Implement `CloudProvider` in `lib/src/providers/<name>.rs` and register it
 in the CLI's `build_provider`. Nothing provider-specific should leak past
 the trait — no provider-specific enum variants or fields on the shared
-`Instance`/`Volume`/`Network` types.
+`Instance`/`Volume`/`Network` types. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Naming note
+
+The library crate is `nimbus-cloud`; the CLI binary is `nimbus`. The bare
+`nimbus` name on crates.io belongs to an unrelated crate, so if/when this is
+published to crates.io the CLI package will need a distinct name
+(`nimbus-cloud-cli` or similar).
 
 ## License
 
-Apache-2.0
+Apache-2.0 — see [LICENSE](LICENSE).

@@ -4,10 +4,18 @@ pub enum Error {
     Auth { provider: &'static str },
 
     #[error("{provider}: {resource} {id} not found")]
-    NotFound { provider: &'static str, resource: &'static str, id: String },
+    NotFound {
+        provider: &'static str,
+        resource: &'static str,
+        id: String,
+    },
 
     #[error("{provider} API error ({status}): {message}")]
-    Api { provider: &'static str, status: u16, message: String },
+    Api {
+        provider: &'static str,
+        status: u16,
+        message: String,
+    },
 
     #[error("request failed: {0}")]
     Transport(#[from] reqwest::Error),

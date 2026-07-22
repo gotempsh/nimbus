@@ -20,7 +20,11 @@ pub struct Hetzner {
 
 impl Hetzner {
     pub fn new(token: impl Into<String>) -> Self {
-        Self { token: token.into(), base: BASE.to_owned(), client: Client::new() }
+        Self {
+            token: token.into(),
+            base: BASE.to_owned(),
+            client: Client::new(),
+        }
     }
 
     /// Point at a different host — e.g. a local mock server for testing.
@@ -49,10 +53,17 @@ impl Hetzner {
         }
         let text = resp.text().await?;
         if !status.is_success() {
-            return Err(Error::Api { provider: PROVIDER, status: status.as_u16(), message: text });
+            return Err(Error::Api {
+                provider: PROVIDER,
+                status: status.as_u16(),
+                message: text,
+            });
         }
-        serde_json::from_str(&text)
-            .map_err(|e| Error::Api { provider: PROVIDER, status: status.as_u16(), message: e.to_string() })
+        serde_json::from_str(&text).map_err(|e| Error::Api {
+            provider: PROVIDER,
+            status: status.as_u16(),
+            message: e.to_string(),
+        })
     }
 
     async fn get(&self, path: &str) -> Result<Value> {
@@ -74,8 +85,14 @@ fn parse_instance(v: &Value) -> Instance {
     Instance {
         id: v["id"].to_string(),
         name: v["name"].as_str().unwrap_or_default().to_owned(),
-        region: v["datacenter"]["location"]["name"].as_str().unwrap_or_default().to_owned(),
-        instance_type: v["server_type"]["name"].as_str().unwrap_or_default().to_owned(),
+        region: v["datacenter"]["location"]["name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        instance_type: v["server_type"]["name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
         status: instance_status(v["status"].as_str().unwrap_or_default()),
         public_ipv4: v["public_net"]["ipv4"]["ip"].as_str().map(str::to_owned),
         private_ipv4: v["private_net"]
@@ -122,8 +139,11 @@ impl CloudProvider for Hetzner {
                     .iter()
                     .find(|p| p["location"].as_str() == Some(region))
                     .or_else(|| t["prices"].as_array().and_then(|a| a.first()))?;
-                let monthly_price: f64 =
-                    price["price_monthly"]["gross"].as_str().unwrap_or("0").parse().unwrap_or(0.0);
+                let monthly_price: f64 = price["price_monthly"]["gross"]
+                    .as_str()
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0.0);
                 Some(InstanceType {
                     id: t["name"].as_str().unwrap_or_default().to_owned(),
                     name: t["description"].as_str().unwrap_or_default().to_owned(),
@@ -192,25 +212,38 @@ impl CloudProvider for Hetzner {
         if let Some(net) = req.network_id {
             body["networks"] = json!([net]);
         }
-        let v = self.request(reqwest::Method::POST, "/servers", Some(body)).await?;
+        let v = self
+            .request(reqwest::Method::POST, "/servers", Some(body))
+            .await?;
         Ok(parse_instance(&v["server"]))
     }
 
     async fn get_instance(&self, id: &str) -> Result<Instance> {
         let v = self.get(&format!("/servers/{id}")).await?;
         if v["server"].is_null() {
-            return Err(Error::NotFound { provider: PROVIDER, resource: "instance", id: id.to_owned() });
+            return Err(Error::NotFound {
+                provider: PROVIDER,
+                resource: "instance",
+                id: id.to_owned(),
+            });
         }
         Ok(parse_instance(&v["server"]))
     }
 
     async fn list_instances(&self) -> Result<Vec<Instance>> {
         let v = self.get("/servers").await?;
-        Ok(v["servers"].as_array().cloned().unwrap_or_default().iter().map(parse_instance).collect())
+        Ok(v["servers"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(parse_instance)
+            .collect())
     }
 
     async fn delete_instance(&self, id: &str) -> Result<()> {
-        self.request(reqwest::Method::DELETE, &format!("/servers/{id}"), None).await?;
+        self.request(reqwest::Method::DELETE, &format!("/servers/{id}"), None)
+            .await?;
         Ok(())
     }
 
@@ -219,11 +252,16 @@ impl CloudProvider for Hetzner {
         if let Some(sid) = &req.instance_id {
             body["server"] = json!(sid.parse::<u64>().unwrap_or(0));
         }
-        let v = self.request(reqwest::Method::POST, "/volumes", Some(body)).await?;
+        let v = self
+            .request(reqwest::Method::POST, "/volumes", Some(body))
+            .await?;
         Ok(Volume {
             id: v["volume"]["id"].to_string(),
             name: v["volume"]["name"].as_str().unwrap_or_default().to_owned(),
-            region: v["volume"]["location"]["name"].as_str().unwrap_or_default().to_owned(),
+            region: v["volume"]["location"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
             size_gb: v["volume"]["size"].as_u64().unwrap_or_default() as u32,
             attached_to: v["volume"]["server"].as_u64().map(|s| s.to_string()),
         })
@@ -239,7 +277,10 @@ impl CloudProvider for Hetzner {
             .map(|vol| Volume {
                 id: vol["id"].to_string(),
                 name: vol["name"].as_str().unwrap_or_default().to_owned(),
-                region: vol["location"]["name"].as_str().unwrap_or_default().to_owned(),
+                region: vol["location"]["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
                 size_gb: vol["size"].as_u64().unwrap_or_default() as u32,
                 attached_to: vol["server"].as_u64().map(|s| s.to_string()),
             })
@@ -260,13 +301,18 @@ impl CloudProvider for Hetzner {
     }
 
     async fn detach_volume(&self, volume_id: &str) -> Result<()> {
-        self.request(reqwest::Method::POST, &format!("/volumes/{volume_id}/actions/detach"), None)
-            .await?;
+        self.request(
+            reqwest::Method::POST,
+            &format!("/volumes/{volume_id}/actions/detach"),
+            None,
+        )
+        .await?;
         Ok(())
     }
 
     async fn delete_volume(&self, id: &str) -> Result<()> {
-        self.request(reqwest::Method::DELETE, &format!("/volumes/{id}"), None).await?;
+        self.request(reqwest::Method::DELETE, &format!("/volumes/{id}"), None)
+            .await?;
         Ok(())
     }
 
@@ -282,7 +328,10 @@ impl CloudProvider for Hetzner {
             id: v["network"]["id"].to_string(),
             name: v["network"]["name"].as_str().unwrap_or_default().to_owned(),
             region: req.region,
-            ip_range: v["network"]["ip_range"].as_str().unwrap_or_default().to_owned(),
+            ip_range: v["network"]["ip_range"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
         })
     }
 
@@ -303,7 +352,8 @@ impl CloudProvider for Hetzner {
     }
 
     async fn delete_network(&self, id: &str) -> Result<()> {
-        self.request(reqwest::Method::DELETE, &format!("/networks/{id}"), None).await?;
+        self.request(reqwest::Method::DELETE, &format!("/networks/{id}"), None)
+            .await?;
         Ok(())
     }
 }

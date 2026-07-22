@@ -91,7 +91,14 @@ async fn create_server(State(store): S, Json(body): Json<Value>) -> Json<Value> 
 }
 
 async fn get_server(State(store): S, Path(id): Path<u64>) -> Result<Json<Value>, StatusCode> {
-    store.servers.lock().unwrap().get(&id).cloned().map(|s| Json(json!({ "server": s }))).ok_or(StatusCode::NOT_FOUND)
+    store
+        .servers
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .map(|s| Json(json!({ "server": s })))
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 async fn list_servers(State(store): S) -> Json<Value> {
@@ -120,7 +127,11 @@ async fn list_volumes(State(store): S) -> Json<Value> {
     Json(json!({ "volumes": store.volumes.lock().unwrap().values().cloned().collect::<Vec<_>>() }))
 }
 
-async fn attach_volume(State(store): S, Path(id): Path<u64>, Json(body): Json<Value>) -> Json<Value> {
+async fn attach_volume(
+    State(store): S,
+    Path(id): Path<u64>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
     if let Some(v) = store.volumes.lock().unwrap().get_mut(&id) {
         v["server"] = body["server"].clone();
     }
@@ -147,7 +158,9 @@ async fn create_network(State(store): S, Json(body): Json<Value>) -> Json<Value>
 }
 
 async fn list_networks(State(store): S) -> Json<Value> {
-    Json(json!({ "networks": store.networks.lock().unwrap().values().cloned().collect::<Vec<_>>() }))
+    Json(
+        json!({ "networks": store.networks.lock().unwrap().values().cloned().collect::<Vec<_>>() }),
+    )
 }
 
 async fn delete_network(State(store): S, Path(id): Path<u64>) -> Json<Value> {

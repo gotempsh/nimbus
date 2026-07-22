@@ -29,7 +29,10 @@ pub fn router() -> Router {
         .route("/v2/os", get(os_list))
         .route("/v2/ssh-keys", post(create_ssh_key))
         .route("/v2/instances", post(create_instance).get(list_instances))
-        .route("/v2/instances/{id}", get(get_instance).delete(delete_instance))
+        .route(
+            "/v2/instances/{id}",
+            get(get_instance).delete(delete_instance),
+        )
         .route("/v2/blocks", post(create_block).get(list_blocks))
         .route("/v2/blocks/{id}", delete(delete_block))
         .route("/v2/blocks/{id}/attach", post(attach_block))
@@ -61,7 +64,9 @@ async fn os_list() -> Json<Value> {
 }
 
 async fn create_ssh_key(Json(body): Json<Value>) -> Json<Value> {
-    Json(json!({ "ssh_key": { "id": Uuid::new_v4().to_string(), "name": body["name"], "ssh_key": body["ssh_key"] } }))
+    Json(
+        json!({ "ssh_key": { "id": Uuid::new_v4().to_string(), "name": body["name"], "ssh_key": body["ssh_key"] } }),
+    )
 }
 
 async fn create_instance(State(store): S, Json(body): Json<Value>) -> Json<Value> {
@@ -92,7 +97,9 @@ async fn get_instance(State(store): S, Path(id): Path<String>) -> Result<Json<Va
 }
 
 async fn list_instances(State(store): S) -> Json<Value> {
-    Json(json!({ "instances": store.instances.lock().unwrap().values().cloned().collect::<Vec<_>>() }))
+    Json(
+        json!({ "instances": store.instances.lock().unwrap().values().cloned().collect::<Vec<_>>() }),
+    )
 }
 
 async fn delete_instance(State(store): S, Path(id): Path<String>) -> StatusCode {
@@ -114,7 +121,11 @@ async fn list_blocks(State(store): S) -> Json<Value> {
     Json(json!({ "blocks": store.blocks.lock().unwrap().values().cloned().collect::<Vec<_>>() }))
 }
 
-async fn attach_block(State(store): S, Path(id): Path<String>, Json(body): Json<Value>) -> StatusCode {
+async fn attach_block(
+    State(store): S,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> StatusCode {
     if let Some(b) = store.blocks.lock().unwrap().get_mut(&id) {
         b["attached_to_instance"] = body["instance_id"].clone();
     }

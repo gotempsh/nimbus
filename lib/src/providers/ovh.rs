@@ -69,8 +69,10 @@ impl Ovh {
 
     fn sign(&self, method: &str, url: &str, body: &str, timestamp: u64) -> String {
         // OVH signature: SHA1(AS+"+"+CK+"+"+METHOD+"+"+URL+"+"+BODY+"+"+TS)
-        let payload =
-            format!("{}+{}+{method}+{url}+{body}+{timestamp}", self.application_secret, self.consumer_key);
+        let payload = format!(
+            "{}+{}+{method}+{url}+{body}+{timestamp}",
+            self.application_secret, self.consumer_key
+        );
         let mut hasher = Sha1::new();
         hasher.update(payload.as_bytes());
         format!("$1${}", hex::encode(hasher.finalize()))
@@ -84,7 +86,10 @@ impl Ovh {
     ) -> Result<Value> {
         let url = format!("{}{path}", self.endpoint);
         let body_str = body.as_ref().map(|b| b.to_string()).unwrap_or_default();
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let signature = self.sign(method.as_str(), &url, &body_str, timestamp);
 
         let mut req = self
@@ -104,13 +109,20 @@ impl Ovh {
         }
         let text = resp.text().await?;
         if !status.is_success() {
-            return Err(Error::Api { provider: PROVIDER, status: status.as_u16(), message: text });
+            return Err(Error::Api {
+                provider: PROVIDER,
+                status: status.as_u16(),
+                message: text,
+            });
         }
         if text.is_empty() {
             return Ok(Value::Null);
         }
-        serde_json::from_str(&text)
-            .map_err(|e| Error::Api { provider: PROVIDER, status: status.as_u16(), message: e.to_string() })
+        serde_json::from_str(&text).map_err(|e| Error::Api {
+            provider: PROVIDER,
+            status: status.as_u16(),
+            message: e.to_string(),
+        })
     }
 
     fn project_path(&self, suffix: &str) -> String {
@@ -167,12 +179,20 @@ impl CloudProvider for Ovh {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|r| r.as_str().map(|id| Region { id: id.to_owned(), name: id.to_owned(), country: None }))
+            .filter_map(|r| {
+                r.as_str().map(|id| Region {
+                    id: id.to_owned(),
+                    name: id.to_owned(),
+                    country: None,
+                })
+            })
             .collect())
     }
 
     async fn instance_types(&self, region: &str) -> Result<Vec<InstanceType>> {
-        let v = self.get(&self.project_path(&format!("/flavor?region={region}"))).await?;
+        let v = self
+            .get(&self.project_path(&format!("/flavor?region={region}")))
+            .await?;
         Ok(v.as_array()
             .cloned()
             .unwrap_or_default()
@@ -193,7 +213,9 @@ impl CloudProvider for Ovh {
     }
 
     async fn images(&self, region: &str) -> Result<Vec<Image>> {
-        let v = self.get(&self.project_path(&format!("/image?region={region}&osType=linux"))).await?;
+        let v = self
+            .get(&self.project_path(&format!("/image?region={region}&osType=linux")))
+            .await?;
         Ok(v.as_array()
             .cloned()
             .unwrap_or_default()
@@ -226,25 +248,47 @@ impl CloudProvider for Ovh {
         if let Some(net) = req.network_id {
             body["networks"] = json!([{ "networkId": net }]);
         }
-        let v = self.request(reqwest::Method::POST, &self.project_path("/instance"), Some(body)).await?;
+        let v = self
+            .request(
+                reqwest::Method::POST,
+                &self.project_path("/instance"),
+                Some(body),
+            )
+            .await?;
         Ok(parse_instance(&v))
     }
 
     async fn get_instance(&self, id: &str) -> Result<Instance> {
-        let v = self.get(&self.project_path(&format!("/instance/{id}"))).await?;
+        let v = self
+            .get(&self.project_path(&format!("/instance/{id}")))
+            .await?;
         if v.is_null() {
-            return Err(Error::NotFound { provider: PROVIDER, resource: "instance", id: id.to_owned() });
+            return Err(Error::NotFound {
+                provider: PROVIDER,
+                resource: "instance",
+                id: id.to_owned(),
+            });
         }
         Ok(parse_instance(&v))
     }
 
     async fn list_instances(&self) -> Result<Vec<Instance>> {
         let v = self.get(&self.project_path("/instance")).await?;
-        Ok(v.as_array().cloned().unwrap_or_default().iter().map(parse_instance).collect())
+        Ok(v.as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(parse_instance)
+            .collect())
     }
 
     async fn delete_instance(&self, id: &str) -> Result<()> {
-        self.request(reqwest::Method::DELETE, &self.project_path(&format!("/instance/{id}")), None).await?;
+        self.request(
+            reqwest::Method::DELETE,
+            &self.project_path(&format!("/instance/{id}")),
+            None,
+        )
+        .await?;
         Ok(())
     }
 
@@ -265,7 +309,10 @@ impl CloudProvider for Ovh {
         };
         if let Some(instance_id) = req.instance_id {
             self.attach_volume(&vol.id, &instance_id).await?;
-            return Ok(Volume { attached_to: Some(instance_id), ..vol });
+            return Ok(Volume {
+                attached_to: Some(instance_id),
+                ..vol
+            });
         }
         Ok(vol)
     }
@@ -311,7 +358,12 @@ impl CloudProvider for Ovh {
     }
 
     async fn delete_volume(&self, id: &str) -> Result<()> {
-        self.request(reqwest::Method::DELETE, &self.project_path(&format!("/volume/{id}")), None).await?;
+        self.request(
+            reqwest::Method::DELETE,
+            &self.project_path(&format!("/volume/{id}")),
+            None,
+        )
+        .await?;
         Ok(())
     }
 
@@ -352,8 +404,12 @@ impl CloudProvider for Ovh {
     }
 
     async fn delete_network(&self, id: &str) -> Result<()> {
-        self.request(reqwest::Method::DELETE, &self.project_path(&format!("/network/private/{id}")), None)
-            .await?;
+        self.request(
+            reqwest::Method::DELETE,
+            &self.project_path(&format!("/network/private/{id}")),
+            None,
+        )
+        .await?;
         Ok(())
     }
 }
