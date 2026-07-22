@@ -1,0 +1,19 @@
+[package]
+name = "nimbus"
+description = "One CLI for instance, storage, and network provisioning across cloud providers."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "nimbus"
+path = "src/main.rs"
+
+[dependencies]
+nimbus-cloud = { path = "../lib" }
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = "1"

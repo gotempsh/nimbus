@@ -1,0 +1,84 @@
+# nimbus
+
+One async trait for instance, block-storage, and network provisioning across
+cloud providers — Hetzner, Vultr, and OVHcloud today. Same call, same types,
+different backend.
+
+```rust
+use nimbus_cloud::{CloudProvider, CreateInstance, providers::Hetzner};
+
+let provider = Hetzner::new(std::env::var("HCLOUD_TOKEN")?);
+
+let regions = provider.regions().await?;
+let sizes = provider.instance_types(&regions[0].id).await?;
+
+let instance = provider
+    .create_instance(CreateInstance {
+        name: "web-1".into(),
+        region: regions[0].id.clone(),
+        instance_type: sizes[0].id.clone(),
+        image: "ubuntu-24.04".into(),
+        ssh_public_key: std::fs::read_to_string("~/.ssh/id_ed25519.pub")?,
+        network_id: None,
+        user_data: None,
+    })
+    .await?;
+```
+
+Swap `Hetzner` for `Vultr` or `Ovh` and the rest of the call is unchanged —
+that's the point.
+
+## What it covers
+
+- **Discovery** — regions, instance types (with monthly price)
+- **Instances** — create, get, list, delete
+- **Storage** — block volumes: create, list, attach, detach, delete
+- **Networks** — private networks/VPCs: create, list, delete
+
+Every call is a plain REST request over `reqwest`; there's no external
+runtime dependency (no Terraform/Pulumi binary, no state file).
+
+## CLI
+
+```bash
+export HCLOUD_TOKEN=...
+cargo run -p nimbus -- --provider hetzner regions
+cargo run -p nimbus -- --provider hetzner sizes fsn1
+cargo run -p nimbus -- --provider hetzner instance create web-1 fsn1 \
+  --type cx22 --image ubuntu-24.04 --ssh-key ~/.ssh/id_ed25519.pub
+```
+
+Provider selection is `--provider hetzner|vultr|ovh` (or `NIMBUS_PROVIDER`
+env var); credentials come from provider-specific env vars:
+
+| Provider | Env vars |
+| --- | --- |
+| Hetzner | `HCLOUD_TOKEN` |
+| Vultr | `VULTR_API_KEY` |
+| OVH | `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY`, `OVH_PROJECT_ID` |
+
+## Layout
+
+- `lib/` — `nimbus-cloud` crate: the `CloudProvider` trait, shared types, and
+  the three provider adapters (`lib/src/providers/`)
+- `cli/` — `nimbus` binary: thin CLI over the trait
+
+## Status
+
+Early. Hetzner and Vultr adapters are complete against their documented
+REST APIs. The OVH adapter is complete for instance/volume/network CRUD but
+does not yet resolve flavor pricing (`instance_types().monthly_usd` is `0.0`
+for OVH pending a `/cloud/project/{id}/price` integration). None of the
+adapters have been exercised against live provider accounts yet — treat as
+unverified until that happens.
+
+## Adding a provider
+
+Implement `CloudProvider` in `lib/src/providers/<name>.rs` and register it
+in the CLI's `build_provider`. Nothing provider-specific should leak past
+the trait — no provider-specific enum variants or fields on the shared
+`Instance`/`Volume`/`Network` types.
+
+## License
+
+Apache-2.0

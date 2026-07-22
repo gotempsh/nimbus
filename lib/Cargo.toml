@@ -1,0 +1,21 @@
+[package]
+name = "nimbus-cloud"
+description = "One async trait for instance, block-storage, and network provisioning across cloud providers (Hetzner, Vultr, OVH)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+url.workspace = true
+sha1 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
