@@ -110,7 +110,10 @@ fn instance_status(s: &str) -> InstanceStatus {
 
 fn parse_instance(v: &Value) -> Instance {
     Instance {
-        id: v["id"].to_string(),
+        id: v["id"]
+            .as_u64()
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
         name: v["hostname"].as_str().unwrap_or_default().to_owned(),
         region: v["data_center_id"]
             .as_u64()
@@ -143,7 +146,7 @@ impl CloudProvider for Hostinger {
             .unwrap_or_default()
             .into_iter()
             .map(|r| Region {
-                id: r["id"].to_string(),
+                id: r["id"].as_u64().map(|id| id.to_string()).unwrap_or_default(),
                 name: r["city"]
                     .as_str()
                     .or(r["name"].as_str())
@@ -198,7 +201,7 @@ impl CloudProvider for Hostinger {
             .unwrap_or_default()
             .into_iter()
             .map(|t| Image {
-                id: t["id"].to_string(),
+                id: t["id"].as_u64().map(|id| id.to_string()).unwrap_or_default(),
                 name: t["name"].as_str().unwrap_or_default().to_owned(),
             })
             .collect())
