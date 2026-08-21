@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use nimbus_cloud::{
-    providers::{DigitalOcean, Hetzner, Linode, Ovh, OvhRegion, Scaleway, Vultr},
+    providers::{DigitalOcean, Hetzner, Hostinger, Linode, Ovh, OvhRegion, Scaleway, Vultr},
     CloudProvider, CreateInstance, CreateNetwork, CreateVolume,
 };
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use std::sync::Arc;
     about = "One CLI for instance/storage/network provisioning across clouds"
 )]
 struct Cli {
-    /// hetzner | vultr | ovh | digitalocean | scaleway | linode
+    /// hetzner | vultr | ovh | digitalocean | scaleway | linode | hostinger
     #[arg(long, global = true, env = "NIMBUS_PROVIDER")]
     provider: Option<String>,
 
@@ -163,9 +163,17 @@ fn build_provider(id: &str, base_url: Option<String>) -> Result<Arc<dyn CloudPro
                 p
             })
         }
+        "hostinger" => {
+            let p = Hostinger::new(env("HOSTINGER_API_TOKEN")?);
+            Arc::new(if let Some(b) = base_url {
+                p.with_base_url(b)
+            } else {
+                p
+            })
+        }
         other => {
             return Err(anyhow!(
-                "unknown provider '{other}' (expected hetzner, vultr, ovh, digitalocean, scaleway, or linode)"
+                "unknown provider '{other}' (expected hetzner, vultr, ovh, digitalocean, scaleway, linode, or hostinger)"
             ))
         }
     })
@@ -180,7 +188,9 @@ fn print_json<T: serde::Serialize>(v: &T) -> Result<()> {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let provider_id = cli.provider.ok_or_else(|| {
-        anyhow!("--provider is required (hetzner, vultr, ovh, digitalocean, scaleway, or linode)")
+        anyhow!(
+            "--provider is required (hetzner, vultr, ovh, digitalocean, scaleway, linode, or hostinger)"
+        )
     })?;
     let provider = build_provider(&provider_id, cli.base_url)?;
 

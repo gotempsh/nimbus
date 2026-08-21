@@ -9,8 +9,8 @@
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 
 One async trait for instance, block-storage, and network provisioning across
-cloud providers — Hetzner, Vultr, OVHcloud, DigitalOcean, Scaleway, and
-Linode today. Same call, same types, different backend.
+cloud providers — Hetzner, Vultr, OVHcloud, DigitalOcean, Scaleway, Linode,
+and Hostinger today. Same call, same types, different backend.
 
 ```rust
 use nimbus_cloud::{CloudProvider, CreateInstance, providers::Hetzner};
@@ -56,7 +56,7 @@ cargo run -p nimbus -- --provider hetzner instance create web-1 fsn1 \
   --type cx22 --image ubuntu-24.04 --ssh-key ~/.ssh/id_ed25519.pub
 ```
 
-Provider selection is `--provider hetzner|vultr|ovh|digitalocean|scaleway|linode` (or `NIMBUS_PROVIDER`
+Provider selection is `--provider hetzner|vultr|ovh|digitalocean|scaleway|linode|hostinger` (or `NIMBUS_PROVIDER`
 env var); credentials come from provider-specific env vars:
 
 | Provider | Env vars |
@@ -67,6 +67,7 @@ env var); credentials come from provider-specific env vars:
 | DigitalOcean | `DIGITALOCEAN_TOKEN` |
 | Scaleway | `SCW_SECRET_KEY`, `SCW_DEFAULT_PROJECT_ID`, `SCW_DEFAULT_ZONE` (default `fr-par-1`) |
 | Linode | `LINODE_TOKEN` |
+| Hostinger | `HOSTINGER_API_TOKEN` |
 
 ## Layout
 
@@ -88,6 +89,7 @@ region/size discovery), in-memory, on an ephemeral port.
 cargo run -p nimbus-mock
 # -> Hetzner :8090/v1 · Vultr :8090/v2 · OVH :8090/1.0 · DO :8090/do/v2
 #    Linode :8090/v4 · Scaleway :8090 (full /instance/v1/... paths)
+#    Hostinger :8090 (full /api/vps/v1/... and /api/billing/v1/... paths)
 
 HCLOUD_TOKEN=anything cargo run -p nimbus -- \
   --provider hetzner --base-url http://127.0.0.1:8090/v1 regions
@@ -101,7 +103,9 @@ let provider = Hetzner::new("mock-token").with_base_url(format!("{base}/v1"));
 ```
 
 `lib/tests/mock_providers.rs` runs the full instance → volume → network
-create/attach/list/delete flow against the mock for every provider, and
+create/attach/list/delete flow against the mock for every provider except
+Hostinger, which has its own test covering what it actually supports (see
+Status below) and asserting the rest fails explicitly.
 `lib/tests/mock_providers_unhappy.rs` covers the failure paths: rejected
 credentials (any missing token or the sentinel `bad-token` → 401 →
 `Error::Auth`), unknown resource ids (404), create-time validation errors
@@ -115,14 +119,26 @@ depending on this in production.
 
 ## Status
 
-Early. All six adapters are complete for instance/volume/network CRUD
-against their documented REST APIs, with two gaps: OVH does not yet resolve
-flavor pricing (`monthly_price` is `0.0` pending a price-catalog
+Early. All seven adapters are complete for instance/volume/network CRUD
+against their documented REST APIs, with a few gaps: OVH does not yet
+resolve flavor pricing (`monthly_price` is `0.0` pending a price-catalog
 integration), and Linode does not yet support attaching a VPC at instance
 create time (returns an explicit error rather than silently ignoring it).
 Scaleway's Instance API is zone-scoped, so a `Scaleway` client is bound to
 one zone at construction. None of the adapters have been exercised against
 live provider accounts yet — treat as unverified until that happens.
+
+Hostinger is structurally different from the rest and worth reading closely
+before using it: `create_instance` purchases a real billing subscription
+(there is no metered pay-as-you-go instance API), there is no API endpoint
+to delete a VPS at all (only cancelling the subscription from the billing
+dashboard), there is no block-storage or private-networking product, and
+plan specs (`vcpus`/`memory_gb`/`disk_gb`) aren't exposed by the catalog
+ahead of purchase so they're left at `0`. `create_volume`/`create_network`/
+`delete_instance` return an explicit `Error::InvalidRequest` rather than
+pretending to support them; the corresponding list calls return an empty
+list, since that's simply true. See the doc comment at the top of
+`lib/src/providers/hostinger.rs` for the full rundown.
 
 ## Adding a provider
 
