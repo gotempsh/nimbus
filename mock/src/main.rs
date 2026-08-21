@@ -18,6 +18,7 @@ async fn main() {
     );
     tracing::info!("  Linode:       http://{addr}/v4     (LINODE_TOKEN: any non-empty string except bad-token)");
     tracing::info!("  Scaleway:     http://{addr}        (SCW_* creds: any non-empty strings; bad-token rejected)");
+    tracing::info!("  Hostinger:    http://{addr}        (HOSTINGER_API_TOKEN: any non-empty string except bad-token)");
     axum::serve(listener, nimbus_mock::router())
         .await
         .expect("server");

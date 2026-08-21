@@ -3,8 +3,8 @@
 //! cloud account or spending money.
 
 use nimbus_cloud::{
-    providers::{DigitalOcean, Hetzner, Linode, Ovh, OvhRegion, Scaleway, Vultr},
-    CloudProvider, CreateInstance, CreateNetwork, CreateVolume,
+    providers::{DigitalOcean, Hetzner, Hostinger, Linode, Ovh, OvhRegion, Scaleway, Vultr},
+    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error,
 };
 
 const SSH_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest test@example.com";
@@ -161,4 +161,89 @@ async fn scaleway_full_flow() {
         "11111111-2222-3333-4444-555555555555",
     )
     .await;
+}
+
+/// Hostinger has no block-storage or private-networking API and no
+/// delete-instance endpoint (a purchased VM is a subscription, cancelled
+/// from billing, not the VPS API) — so it can't run the shared `exercise()`
+/// flow. This covers what it does support and asserts the rest fails
+/// explicitly instead of silently succeeding.
+#[tokio::test]
+async fn hostinger_full_flow() {
+    let base = nimbus_mock::spawn().await;
+    let provider = Hostinger::new("mock-token").with_base_url(format!("{base}/api"));
+
+    let regions = provider.regions().await.expect("regions");
+    assert!(!regions.is_empty(), "hostinger: expected a data center");
+
+    let types = provider
+        .instance_types(&regions[0].id)
+        .await
+        .expect("instance_types");
+    assert!(!types.is_empty(), "hostinger: expected a catalog plan");
+    assert!(!types[0].currency.is_empty());
+
+    let images = provider.images(&regions[0].id).await.expect("images");
+    assert!(!images.is_empty(), "hostinger: expected a template");
+
+    provider.verify().await.expect("verify");
+
+    let instance = provider
+        .create_instance(CreateInstance {
+            name: "nimbus-test".into(),
+            region: regions[0].id.clone(),
+            instance_type: types[0].id.clone(),
+            image: images[0].id.clone(),
+            ssh_public_key: SSH_KEY.into(),
+            network_id: None,
+            user_data: None,
+        })
+        .await
+        .expect("create_instance");
+
+    let fetched = provider
+        .get_instance(&instance.id)
+        .await
+        .expect("get_instance");
+    assert_eq!(fetched.id, instance.id);
+
+    let listed = provider.list_instances().await.expect("list_instances");
+    assert!(listed.iter().any(|i| i.id == instance.id));
+
+    assert!(provider
+        .list_volumes()
+        .await
+        .expect("list_volumes")
+        .is_empty());
+    assert!(provider
+        .list_networks()
+        .await
+        .expect("list_networks")
+        .is_empty());
+
+    assert!(matches!(
+        provider
+            .create_volume(CreateVolume {
+                name: "nimbus-vol".into(),
+                region: regions[0].id.clone(),
+                size_gb: 10,
+                instance_id: None,
+            })
+            .await,
+        Err(Error::InvalidRequest(_))
+    ));
+    assert!(matches!(
+        provider
+            .create_network(CreateNetwork {
+                name: "nimbus-net".into(),
+                region: regions[0].id.clone(),
+                ip_range: "10.0.0.0/16".into(),
+            })
+            .await,
+        Err(Error::InvalidRequest(_))
+    ));
+    assert!(matches!(
+        provider.delete_instance(&instance.id).await,
+        Err(Error::InvalidRequest(_))
+    ));
 }

@@ -6,6 +6,7 @@
 
 mod digitalocean;
 mod hetzner;
+mod hostinger;
 mod linode;
 mod ovh;
 mod scaleway;
@@ -22,8 +23,9 @@ use serde_json::json;
 
 /// Router serving all provider mocks on distinct path prefixes so one bound
 /// port covers everything: `/v1` Hetzner, `/v2` Vultr, `/1.0` OVH,
-/// `/do/v2` DigitalOcean (Vultr owns the bare `/v2`), `/v4` Linode, and
-/// Scaleway's full `/instance/v1`···`/iam`···`/vpc` paths.
+/// `/do/v2` DigitalOcean (Vultr owns the bare `/v2`), `/v4` Linode,
+/// Scaleway's full `/instance/v1`···`/iam`···`/vpc` paths, and Hostinger's
+/// full `/api/vps/v1`···`/api/billing/v1` paths.
 ///
 /// Unhappy paths: every route rejects a missing credential or the sentinel
 /// token `bad-token` with 401 (each provider's real auth header is checked),
@@ -37,6 +39,7 @@ pub fn router() -> Router {
         .merge(digitalocean::router())
         .merge(linode::router())
         .merge(scaleway::router())
+        .merge(hostinger::router())
         .layer(axum::middleware::from_fn(auth_gate))
 }
 
@@ -56,8 +59,8 @@ fn header<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
 }
 
 /// Checks the auth header each real API uses: bearer tokens for
-/// Hetzner/Vultr/DO/Linode, `X-Ovh-Consumer` for OVH (signatures are NOT
-/// verified), `X-Auth-Token` for Scaleway.
+/// Hetzner/Vultr/DO/Linode/Hostinger, `X-Ovh-Consumer` for OVH (signatures
+/// are NOT verified), `X-Auth-Token` for Scaleway.
 async fn auth_gate(req: Request<Body>, next: Next) -> Response {
     let path = req.uri().path();
     let headers = req.headers();

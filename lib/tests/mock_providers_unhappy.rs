@@ -4,7 +4,7 @@
 //! Error::Api), and an unreachable host (Error::Transport).
 
 use nimbus_cloud::{
-    providers::{DigitalOcean, Hetzner, Linode, Ovh, OvhRegion, Scaleway, Vultr},
+    providers::{DigitalOcean, Hetzner, Hostinger, Linode, Ovh, OvhRegion, Scaleway, Vultr},
     CloudProvider, CreateInstance, Error,
 };
 
@@ -103,6 +103,13 @@ async fn scaleway_bad_token() {
     assert_auth(p.instance_types("fr-par-1").await.unwrap_err(), "scaleway");
 }
 
+#[tokio::test]
+async fn hostinger_bad_token() {
+    let base = nimbus_mock::spawn().await;
+    let p = Hostinger::new("bad-token").with_base_url(format!("{base}/api"));
+    assert_auth(p.regions().await.unwrap_err(), "hostinger");
+}
+
 // ---------- unknown resource ids ----------
 
 #[tokio::test]
@@ -129,10 +136,16 @@ async fn get_unknown_instance_is_404() {
     let linode = Linode::new("t").with_base_url(format!("{base}/v4"));
     assert_not_found(linode.get_instance("424242").await.unwrap_err(), "linode");
 
-    let scaleway = Scaleway::new("t", "proj", "fr-par-1").with_base_url(base);
+    let scaleway = Scaleway::new("t", "proj", "fr-par-1").with_base_url(base.clone());
     assert_not_found(
         scaleway.get_instance(zero_uuid).await.unwrap_err(),
         "scaleway",
+    );
+
+    let hostinger = Hostinger::new("t").with_base_url(format!("{base}/api"));
+    assert_not_found(
+        hostinger.get_instance("999999").await.unwrap_err(),
+        "hostinger",
     );
 }
 
@@ -187,13 +200,22 @@ async fn create_with_invalid_type_surfaces_provider_error() {
         "linode",
     );
 
-    let scaleway = Scaleway::new("t", "proj", "fr-par-1").with_base_url(base);
+    let scaleway = Scaleway::new("t", "proj", "fr-par-1").with_base_url(base.clone());
     assert_validation(
         scaleway
             .create_instance(create_req("fr-par-1", "img-uuid"))
             .await
             .unwrap_err(),
         "scaleway",
+    );
+
+    let hostinger = Hostinger::new("t").with_base_url(format!("{base}/api"));
+    assert_validation(
+        hostinger
+            .create_instance(create_req("19", "1130"))
+            .await
+            .unwrap_err(),
+        "hostinger",
     );
 }
 
