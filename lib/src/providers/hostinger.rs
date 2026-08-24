@@ -19,8 +19,14 @@
 //!   an empty list, which is simply true.
 //! - The billing catalog (used for `instance_types`) does not expose
 //!   vcpu/memory/disk specs ahead of purchase — those only appear on a VM
-//!   resource after it exists — so `vcpus`/`memory_gb`/`disk_gb` are left at
-//!   0 (documented gap, same treatment as OVH's pending `monthly_price`).
+//!   resource after it exists. Hostinger's VPS hardware is fixed per plan
+//!   tier and identical across plan families (KVM and Game Panel share
+//!   hardware, differing only in pre-installed software), so `vcpus`/
+//!   `memory_gb`/`disk_gb` are filled in from a static table in
+//!   [`known_specs`], keyed by the tier number in the plan's display name
+//!   (e.g. "KVM 2", "Game Panel 2" -> tier 2). A plan whose name doesn't
+//!   match a known tier falls back to 0, same treatment as OVH's pending
+//!   `monthly_price`.
 
 use crate::{
     CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
@@ -92,6 +98,23 @@ impl Hostinger {
 
     async fn get(&self, path: &str) -> Result<Value> {
         self.request(reqwest::Method::GET, path, None).await
+    }
+}
+
+/// (vcpus, memory_gb, disk_gb) for a known Hostinger VPS plan tier, parsed
+/// from the plan's display name (e.g. "KVM 2", "Game Panel 2 (billed every
+/// month)" both resolve to tier 2). Specs verified against
+/// https://www.hostinger.com/vps-hosting and
+/// https://www.hostinger.com/minecraft-server-hosting (2026-08-24) — both
+/// plan families share identical hardware per tier.
+fn known_specs(name: &str) -> Option<(u32, f32, u32)> {
+    let tier: u32 = name.split_whitespace().find_map(|tok| tok.parse().ok())?;
+    match tier {
+        1 => Some((1, 4.0, 50)),
+        2 => Some((2, 8.0, 100)),
+        4 => Some((4, 16.0, 200)),
+        8 => Some((8, 32.0, 400)),
+        _ => None,
     }
 }
 
@@ -174,20 +197,23 @@ impl CloudProvider for Hostinger {
                     // one InstanceType per plan — skip the daily/weekly/yearly
                     // duplicates of the same plan.
                     .filter(|p| p["period_unit"].as_str() == Some("month") && p["period"] == 1)
-                    .map(|p| InstanceType {
-                        id: p["id"].as_str().unwrap_or_default().to_owned(),
-                        name: p["name"]
-                            .as_str()
-                            .or(item["name"].as_str())
-                            .unwrap_or_default()
-                            .to_owned(),
-                        // Not exposed by the catalog ahead of purchase — see
-                        // the module doc comment.
-                        vcpus: 0,
-                        memory_gb: 0.0,
-                        disk_gb: 0,
-                        monthly_price: p["price"].as_f64().unwrap_or_default() / 100.0,
-                        currency: p["currency"].as_str().unwrap_or("USD").to_owned(),
+                    .map(|p| {
+                        let (vcpus, memory_gb, disk_gb) =
+                            known_specs(item["name"].as_str().unwrap_or_default())
+                                .unwrap_or((0, 0.0, 0));
+                        InstanceType {
+                            id: p["id"].as_str().unwrap_or_default().to_owned(),
+                            name: p["name"]
+                                .as_str()
+                                .or(item["name"].as_str())
+                                .unwrap_or_default()
+                                .to_owned(),
+                            vcpus,
+                            memory_gb,
+                            disk_gb,
+                            monthly_price: p["price"].as_f64().unwrap_or_default() / 100.0,
+                            currency: p["currency"].as_str().unwrap_or("USD").to_owned(),
+                        }
                     })
                     .collect::<Vec<_>>()
             })
@@ -317,5 +343,40 @@ impl CloudProvider for Hostinger {
         Err(Error::InvalidRequest(
             "hostinger: private networking is not exposed via the API".into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::known_specs;
+
+    #[test]
+    fn known_specs_matches_kvm_tiers() {
+        assert_eq!(known_specs("KVM 1"), Some((1, 4.0, 50)));
+        assert_eq!(known_specs("KVM 2"), Some((2, 8.0, 100)));
+        assert_eq!(known_specs("KVM 4"), Some((4, 16.0, 200)));
+        assert_eq!(known_specs("KVM 8"), Some((8, 32.0, 400)));
+    }
+
+    #[test]
+    fn known_specs_matches_game_panel_tiers_same_as_kvm() {
+        assert_eq!(known_specs("Game Panel 1"), known_specs("KVM 1"));
+        assert_eq!(known_specs("Game Panel 2"), known_specs("KVM 2"));
+        assert_eq!(known_specs("Game Panel 4"), known_specs("KVM 4"));
+        assert_eq!(known_specs("Game Panel 8"), known_specs("KVM 8"));
+    }
+
+    #[test]
+    fn known_specs_ignores_billing_suffix() {
+        assert_eq!(
+            known_specs("KVM 2 (billed every month)"),
+            Some((2, 8.0, 100))
+        );
+    }
+
+    #[test]
+    fn known_specs_unknown_plan_returns_none() {
+        assert_eq!(known_specs("Shared Hosting Premium"), None);
+        assert_eq!(known_specs(""), None);
     }
 }

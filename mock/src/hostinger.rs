@@ -74,6 +74,20 @@ async fn catalog() -> Json<Value> {
                   "price": 799, "first_period_price": 399, "period": 1, "period_unit": "month" },
             ],
         },
+        {
+            // Game Panel plans are codenamed after Minecraft mobs in the real
+            // catalog (e.g. "kvmminecraftalex") rather than by tier number —
+            // only the display `name` carries the tier, which is why spec
+            // lookup keys off `name`, not `id`.
+            "id": "hostingercom-vps-kvmminecraftalex",
+            "name": "Game Panel 1",
+            "category": "VPS",
+            "metadata": null,
+            "prices": [
+                { "id": "hostingercom-vps-kvmminecraftalex-usd-1m", "name": "Game Panel 1 (billed every month)", "currency": "USD",
+                  "price": 1949, "first_period_price": 1949, "period": 1, "period_unit": "month" },
+            ],
+        },
     ]))
 }
 
