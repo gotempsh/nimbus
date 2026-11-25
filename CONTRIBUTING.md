@@ -35,9 +35,11 @@ All three must pass — CI enforces the same commands.
 
 ## Adding a provider
 
-Implement `CloudProvider` in `lib/src/providers/<name>.rs`, add a mock in
-`mock/src/<name>.rs`, register both, wire the CLI's `build_provider`, and
-add a full-flow test. Nothing provider-specific may leak past the trait —
+Implement `CloudProvider` in `lib/src/providers/<name>.rs` (including
+`check_credential`, using the strongest read-only call the provider's API
+offers), add a mock in `mock/src/<name>.rs`, register both, describe the
+provider's credential fields and caveats in `lib/src/catalog.rs`, wire the
+CLI's `build_provider`, and add a full-flow test. Nothing provider-specific may leak past the trait —
 no provider-specific fields on the shared `Instance`/`Volume`/`Network`
 types.
 
