@@ -3,7 +3,9 @@
 //! (fr-par-1, nl-ams-1, ...), so a client is bound to one zone at
 //! construction; `regions()` still lists all known zones for discovery.
 //! Servers are created stopped and powered on explicitly; deletion uses the
-//! `terminate` action (which also releases the server's volumes).
+//! `terminate` action (which also releases the server's volumes). User data
+//! is not part of create-server: it is set per key on the stopped server
+//! before that first boot.
 
 use crate::{
     CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
@@ -15,6 +17,8 @@ use serde_json::{json, Value};
 
 const BASE: &str = "https://api.scaleway.com";
 const PROVIDER: &str = "scaleway";
+/// The user-data key cloud-init reads its config/script from.
+const CLOUD_INIT_KEY: &str = "cloud-init";
 
 /// All Instance API zones as of 2026. Scaleway has no unauthenticated
 /// zone-discovery endpoint; this list changes rarely.
@@ -115,6 +119,32 @@ impl Scaleway {
         self.request(reqwest::Method::GET, path, None).await
     }
 
+    /// Create-server takes no user data: each key is its own resource, set
+    /// with a raw (not JSON) body on `/servers/{id}/user_data/{key}`.
+    async fn set_user_data(&self, server_id: &str, key: &str, content: &str) -> Result<()> {
+        let path = self.instance_path(&format!("/servers/{server_id}/user_data/{key}"));
+        let resp = self
+            .client
+            .patch(format!("{}{path}", self.base))
+            .header("X-Auth-Token", &self.secret_key)
+            .header(reqwest::header::CONTENT_TYPE, "text/plain")
+            .body(content.to_owned())
+            .send()
+            .await?;
+        let status = resp.status();
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            return Err(Error::Auth { provider: PROVIDER });
+        }
+        if !status.is_success() {
+            return Err(Error::Api {
+                provider: PROVIDER,
+                status: status.as_u16(),
+                message: resp.text().await?,
+            });
+        }
+        Ok(())
+    }
+
     async fn server_action(&self, id: &str, action: &str) -> Result<()> {
         self.request(
             reqwest::Method::POST,
@@ -123,6 +153,27 @@ impl Scaleway {
         )
         .await?;
         Ok(())
+    }
+}
+
+/// The server already exists (stopped, never booted) when setting its user
+/// data fails, so the error has to say so — otherwise the caller is left with
+/// a resource they don't know about.
+fn user_data_failed(server_id: &str, cause: Error) -> Error {
+    let context = format!(
+        "server {server_id} was created but left stopped because setting its cloud-init user data failed; delete it or retry"
+    );
+    match cause {
+        Error::Api {
+            provider,
+            status,
+            message,
+        } => Error::Api {
+            provider,
+            status,
+            message: format!("{context}: {message}"),
+        },
+        other => Error::InvalidRequest(format!("{PROVIDER}: {context}: {other}")),
     }
 }
 
@@ -232,16 +283,13 @@ impl CloudProvider for Scaleway {
             Err(Error::Api { message, .. }) if message.contains("already exists") => {}
             Err(e) => return Err(e),
         }
-        let mut body = json!({
+        let body = json!({
             "name": req.name,
             "commercial_type": req.instance_type,
             "image": req.image,
             "project": self.project_id,
             "dynamic_ip_required": true,
         });
-        if let Some(ud) = &req.user_data {
-            body["user_data"] = json!({ "cloud-init": ud });
-        }
         let v = self
             .request(
                 reqwest::Method::POST,
@@ -250,6 +298,13 @@ impl CloudProvider for Scaleway {
             )
             .await?;
         let server = parse_instance(&v["server"]);
+        if let Some(ud) = &req.user_data {
+            // Must land while the server is still stopped: cloud-init reads
+            // it on first boot, and the poweron below is that boot.
+            self.set_user_data(&server.id, CLOUD_INIT_KEY, ud)
+                .await
+                .map_err(|e| user_data_failed(&server.id, e))?;
+        }
         if let Some(net) = req.network_id {
             self.request(
                 reqwest::Method::POST,

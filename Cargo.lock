@@ -794,6 +794,7 @@ name = "nimbus-mock"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "nimbus-cloud",
  "reqwest",
  "serde",

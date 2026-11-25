@@ -246,8 +246,11 @@ impl CloudProvider for Hostinger {
             ));
         }
         if req.user_data.is_some() {
+            // Checked before anything is sent: this create is a purchase,
+            // so a server that came up without its first-boot script would
+            // already have been paid for.
             return Err(Error::InvalidRequest(
-                "hostinger: cloud-init user-data is not supported by the VPS setup API".into(),
+                "hostinger: user_data is not supported — the VPS purchase API accepts no cloud-init user data (only the id of a post-install script registered beforehand, which nimbus does not manage). Nothing was purchased; create the instance without user_data or use another provider".into(),
             ));
         }
         let data_center_id: u64 = req.region.parse().map_err(|_| {

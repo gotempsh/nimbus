@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 #[derive(Default)]
 struct Store {
+    recorder: crate::Recorder,
     instances: Mutex<HashMap<String, Value>>,
     blocks: Mutex<HashMap<String, Value>>,
     vpcs: Mutex<HashMap<String, Value>>,
@@ -20,8 +21,11 @@ struct Store {
 
 type S = State<Arc<Store>>;
 
-pub fn router() -> Router {
-    let store = Arc::new(Store::default());
+pub fn router(recorder: crate::Recorder) -> Router {
+    let store = Arc::new(Store {
+        recorder,
+        ..Store::default()
+    });
     Router::new()
         .route("/v2/regions", get(regions))
         .route("/v2/regions/{id}/availability", get(availability))
@@ -80,6 +84,20 @@ async fn create_instance(
         ));
     }
     let id = Uuid::new_v4().to_string();
+    // Vultr only accepts user data base64-encoded.
+    if let Some(received) = body["user_data"].as_str() {
+        let Some(script) = crate::decode_base64_user_data(received) else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(
+                    json!({ "error": "Invalid user_data: must be base64 encoded.", "status": 400 }),
+                ),
+            ));
+        };
+        store
+            .recorder
+            .user_data("vultr", &id, received, &script, "base64");
+    }
     let record = json!({
         "id": id,
         "label": body["label"],

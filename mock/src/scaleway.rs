@@ -4,7 +4,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 use serde_json::{json, Value};
@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 #[derive(Default)]
 struct Store {
+    recorder: crate::Recorder,
     servers: Mutex<HashMap<String, Value>>,
     volumes: Mutex<HashMap<String, Value>>,
     networks: Mutex<HashMap<String, Value>>,
@@ -24,8 +25,11 @@ struct Store {
 type S = State<Arc<Store>>;
 const P: &str = "/instance/v1/zones/{zone}";
 
-pub fn router() -> Router {
-    let store = Arc::new(Store::default());
+pub fn router(recorder: crate::Recorder) -> Router {
+    let store = Arc::new(Store {
+        recorder,
+        ..Store::default()
+    });
     Router::new()
         .route(&format!("{P}/products/servers"), get(products))
         .route(&format!("{P}/images"), get(images))
@@ -36,6 +40,10 @@ pub fn router() -> Router {
         )
         .route(&format!("{P}/servers/{{id}}"), get(get_server))
         .route(&format!("{P}/servers/{{id}}/action"), post(server_action))
+        .route(
+            &format!("{P}/servers/{{id}}/user_data/{{key}}"),
+            patch(set_user_data),
+        )
         .route(
             &format!("{P}/servers/{{id}}/attach-volume"),
             post(attach_volume),
@@ -150,6 +158,25 @@ async fn server_action(
         _ => {}
     }
     Json(json!({ "task": { "status": "pending" } }))
+}
+
+/// Scaleway keeps user data as per-key resources set with a raw (non-JSON)
+/// body; create-server has no field for it. Only the `cloud-init` key is
+/// what cloud-init runs, and only if it is in place before the first boot —
+/// so that is the only case recorded as a delivered script.
+async fn set_user_data(
+    State(store): S,
+    Path((_zone, id, key)): Path<(String, String, String)>,
+    body: String,
+) -> StatusCode {
+    let servers = store.servers.lock().unwrap();
+    let Some(server) = servers.get(&id) else {
+        return StatusCode::NOT_FOUND;
+    };
+    if key == "cloud-init" && server["state"] == "stopped" {
+        store.recorder.plain_user_data("scaleway", &id, &body);
+    }
+    StatusCode::NO_CONTENT
 }
 
 async fn private_nic(Json(_body): Json<Value>) -> Json<Value> {

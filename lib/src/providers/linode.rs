@@ -1,6 +1,7 @@
 //! Linode (Akamai) adapter. API docs: https://techdocs.akamai.com/linode-api/
 //! Flat REST + bearer token, no request signing.
 
+use super::base64_encode;
 use crate::{
     CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
     InstanceStatus, InstanceType, Network, Region, Result, Volume,
@@ -195,10 +196,9 @@ impl CloudProvider for Linode {
             "booted": true,
         });
         if let Some(ud) = req.user_data {
-            // Linode metadata expects base64 user-data.
-            let mut b64 = String::new();
-            base64_encode(ud.as_bytes(), &mut b64);
-            body["metadata"] = json!({ "user_data": b64 });
+            // The Metadata service only accepts base64-encoded user data
+            // (`metadata.user_data`, format `byte` in the API spec).
+            body["metadata"] = json!({ "user_data": base64_encode(ud.as_bytes()) });
         }
         let v = self
             .request(reqwest::Method::POST, "/linode/instances", Some(body))
@@ -352,30 +352,5 @@ impl CloudProvider for Linode {
         self.request(reqwest::Method::DELETE, &format!("/vpcs/{id}"), None)
             .await?;
         Ok(())
-    }
-}
-
-/// Minimal base64 (standard alphabet, padded) to avoid another dependency.
-fn base64_encode(input: &[u8], out: &mut String) {
-    const TBL: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    for chunk in input.chunks(3) {
-        let b = [
-            chunk[0],
-            chunk.get(1).copied().unwrap_or(0),
-            chunk.get(2).copied().unwrap_or(0),
-        ];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
-        out.push(TBL[(n >> 18) as usize & 63] as char);
-        out.push(TBL[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            TBL[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            TBL[n as usize & 63] as char
-        } else {
-            '='
-        });
     }
 }

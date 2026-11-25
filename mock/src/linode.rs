@@ -17,6 +17,7 @@ use std::{
 
 #[derive(Default)]
 struct Store {
+    recorder: crate::Recorder,
     next_id: AtomicU64,
     instances: Mutex<HashMap<u64, Value>>,
     volumes: Mutex<HashMap<u64, Value>>,
@@ -31,8 +32,11 @@ impl Store {
 
 type S = State<Arc<Store>>;
 
-pub fn router() -> Router {
-    let store = Arc::new(Store::default());
+pub fn router(recorder: crate::Recorder) -> Router {
+    let store = Arc::new(Store {
+        recorder,
+        ..Store::default()
+    });
     Router::new()
         .route("/v4/regions", get(regions))
         .route("/v4/linode/types", get(types))
@@ -86,6 +90,21 @@ async fn create_instance(
         ));
     }
     let id = store.id();
+    // The Metadata service only accepts base64-encoded user data.
+    if let Some(received) = body["metadata"]["user_data"].as_str() {
+        let Some(script) = crate::decode_base64_user_data(received) else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "errors": [{
+                    "field": "metadata.user_data",
+                    "reason": "user_data must be base64 encoded",
+                }] })),
+            ));
+        };
+        store
+            .recorder
+            .user_data("linode", id, received, &script, "base64");
+    }
     let record = json!({
         "id": id,
         "label": body["label"],

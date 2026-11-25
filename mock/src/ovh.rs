@@ -18,6 +18,7 @@ use std::{
 
 #[derive(Default)]
 struct Store {
+    recorder: crate::Recorder,
     next_id: AtomicU64,
     instances: Mutex<HashMap<u64, Value>>,
     volumes: Mutex<HashMap<u64, Value>>,
@@ -33,8 +34,11 @@ impl Store {
 type S = State<Arc<Store>>;
 const P: &str = "/1.0/cloud/project/{sid}";
 
-pub fn router() -> Router {
-    let store = Arc::new(Store::default());
+pub fn router(recorder: crate::Recorder) -> Router {
+    let store = Arc::new(Store {
+        recorder,
+        ..Store::default()
+    });
     Router::new()
         .route(&format!("{P}/region"), get(regions))
         .route(&format!("{P}/flavor"), get(flavors))
@@ -107,6 +111,10 @@ async fn create_instance(
         "status": "ACTIVE",
         "ipAddresses": [{ "type": "public", "ip": format!("51.75.{}.10", id % 254) }],
     });
+    // OVH takes `userData` as plain text.
+    if let Some(ud) = body["userData"].as_str() {
+        store.recorder.plain_user_data("ovh", id, ud);
+    }
     store.instances.lock().unwrap().insert(id, record.clone());
     Ok(Json(record))
 }

@@ -1,6 +1,7 @@
 //! Vultr adapter. API docs: https://www.vultr.com/api/
 //! Flat REST + bearer token, no request signing.
 
+use super::base64_encode;
 use crate::{
     CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
     InstanceStatus, InstanceType, Network, Region, Result, Volume,
@@ -200,7 +201,9 @@ impl CloudProvider for Vultr {
             body.as_object_mut().unwrap().remove("os_id");
         }
         if let Some(ud) = req.user_data {
-            body["user_data"] = json!(ud);
+            // Vultr only accepts user data base64-encoded; sending the raw
+            // script is rejected (or worse, stored as garbage) by the API.
+            body["user_data"] = json!(base64_encode(ud.as_bytes()));
         }
         if let Some(net) = req.network_id {
             body["attach_vpc"] = json!([net]);

@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 #[derive(Default)]
 struct Store {
+    recorder: crate::Recorder,
     next_id: AtomicU64,
     droplets: Mutex<HashMap<u64, Value>>,
     volumes: Mutex<HashMap<String, Value>>,
@@ -33,8 +34,11 @@ impl Store {
 
 type S = State<Arc<Store>>;
 
-pub fn router() -> Router {
-    let store = Arc::new(Store::default());
+pub fn router(recorder: crate::Recorder) -> Router {
+    let store = Arc::new(Store {
+        recorder,
+        ..Store::default()
+    });
     Router::new()
         .route("/do/v2/regions", get(regions))
         .route("/do/v2/sizes", get(sizes))
@@ -107,6 +111,10 @@ async fn create_droplet(
             { "ip_address": format!("164.90.20.{}", id % 250 + 1), "type": "public" },
         ]},
     });
+    // DigitalOcean takes `user_data` as plain text.
+    if let Some(ud) = body["user_data"].as_str() {
+        store.recorder.plain_user_data("digitalocean", id, ud);
+    }
     store.droplets.lock().unwrap().insert(id, record.clone());
     Ok(Json(json!({ "droplet": record })))
 }
