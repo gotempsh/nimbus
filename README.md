@@ -79,17 +79,19 @@ nimbus --version
 ```
 
 If the [releases page](https://github.com/gotempsh/nimbus/releases) is
-empty, no version has been tagged yet — build from source instead (needs a
-Rust toolchain):
+empty, no release has been published yet — build from source instead (needs
+a Rust toolchain):
 
 ```bash
 git clone https://github.com/gotempsh/nimbus && cd nimbus
 cargo build --release --locked -p nimbus    # -> target/release/nimbus
 ```
 
-Releases are cut by `.github/workflows/release.yml` when a tag `v<version>`
-matching the version in `Cargo.toml` is pushed. The same workflow builds
-every target (without publishing) on pull requests that touch the CLI.
+Releases are cut by `.github/workflows/release.yml`: set `version` in the
+workspace `Cargo.toml`, merge, then push a new tag `v<version>` on that
+commit. A tag that does not match the version fails the build instead of
+publishing. The same workflow builds every target (without publishing) on
+pull requests that touch the CLI.
 
 ### Quick start
 
