@@ -183,6 +183,31 @@ async fn hostinger_full_flow() {
     assert!(!types.is_empty(), "hostinger: expected a catalog plan");
     assert!(!types[0].currency.is_empty());
 
+    let kvm2 = types
+        .iter()
+        .find(|t| t.name.starts_with("KVM 2"))
+        .expect("hostinger: expected the KVM 2 plan");
+    assert_eq!(kvm2.vcpus, 2, "hostinger: KVM 2 should report 2 vcpus");
+    assert_eq!(
+        kvm2.memory_gb, 8.0,
+        "hostinger: KVM 2 should report 8 GB memory"
+    );
+    assert_eq!(
+        kvm2.disk_gb, 100,
+        "hostinger: KVM 2 should report 100 GB disk"
+    );
+
+    let game_panel_1 = types
+        .iter()
+        .find(|t| t.name.starts_with("Game Panel 1"))
+        .expect("hostinger: expected the Game Panel 1 plan");
+    assert_eq!(
+        game_panel_1.vcpus, 1,
+        "hostinger: Game Panel 1 should share KVM 1's specs"
+    );
+    assert_eq!(game_panel_1.memory_gb, 4.0);
+    assert_eq!(game_panel_1.disk_gb, 50);
+
     let images = provider.images(&regions[0].id).await.expect("images");
     assert!(!images.is_empty(), "hostinger: expected a template");
 
