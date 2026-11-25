@@ -3,7 +3,7 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -18,6 +18,7 @@ use std::{
 
 #[derive(Default)]
 struct Store {
+    recorder: crate::Recorder,
     next_id: AtomicU64,
     instances: Mutex<HashMap<u64, Value>>,
     volumes: Mutex<HashMap<u64, Value>>,
@@ -33,9 +34,14 @@ impl Store {
 type S = State<Arc<Store>>;
 const P: &str = "/1.0/cloud/project/{sid}";
 
-pub fn router() -> Router {
-    let store = Arc::new(Store::default());
+pub fn router(recorder: crate::Recorder) -> Router {
+    let store = Arc::new(Store {
+        recorder,
+        ..Store::default()
+    });
     Router::new()
+        .route("/1.0/auth/currentCredential", get(current_credential))
+        .route(P, get(project))
         .route(&format!("{P}/region"), get(regions))
         .route(&format!("{P}/flavor"), get(flavors))
         .route(&format!("{P}/image"), get(images))
@@ -64,6 +70,51 @@ pub fn router() -> Router {
             delete(delete_network),
         )
         .with_state(store)
+}
+
+/// The consumer key's state and the method+path rules it was granted.
+async fn current_credential(headers: HeaderMap) -> Json<Value> {
+    let rules = if crate::header(&headers, "x-ovh-consumer") == Some(crate::READ_ONLY_TOKEN) {
+        json!([{ "method": "GET", "path": "/*" }])
+    } else {
+        json!([
+            { "method": "GET", "path": "/cloud/project/*" },
+            { "method": "POST", "path": "/cloud/project/*" },
+            { "method": "DELETE", "path": "/cloud/project/*" },
+        ])
+    };
+    Json(json!({
+        "credentialId": 1234567,
+        "applicationId": 7654321,
+        "status": "validated",
+        "ovhSupport": false,
+        "creation": "2026-01-01T00:00:00+00:00",
+        "expiration": null,
+        "lastUse": null,
+        "allowedIPs": null,
+        "rules": rules,
+    }))
+}
+
+async fn project(Path(sid): Path<String>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let status = match sid.as_str() {
+        "missing-project" => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({ "message": "This service does not exist" })),
+            ))
+        }
+        "suspended-project" => "suspended",
+        _ => "ok",
+    };
+    Ok(Json(json!({
+        "project_id": sid,
+        "projectName": "example",
+        "description": "example",
+        "status": status,
+        "planCode": "project.2018",
+        "access": "full",
+    })))
 }
 
 async fn regions() -> Json<Value> {
@@ -107,6 +158,10 @@ async fn create_instance(
         "status": "ACTIVE",
         "ipAddresses": [{ "type": "public", "ip": format!("51.75.{}.10", id % 254) }],
     });
+    // OVH takes `userData` as plain text.
+    if let Some(ud) = body["userData"].as_str() {
+        store.recorder.plain_user_data("ovh", id, ud);
+    }
     store.instances.lock().unwrap().insert(id, record.clone());
     Ok(Json(record))
 }

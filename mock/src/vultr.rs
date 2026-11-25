@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 #[derive(Default)]
 struct Store {
+    recorder: crate::Recorder,
     instances: Mutex<HashMap<String, Value>>,
     blocks: Mutex<HashMap<String, Value>>,
     vpcs: Mutex<HashMap<String, Value>>,
@@ -20,9 +21,13 @@ struct Store {
 
 type S = State<Arc<Store>>;
 
-pub fn router() -> Router {
-    let store = Arc::new(Store::default());
+pub fn router(recorder: crate::Recorder) -> Router {
+    let store = Arc::new(Store {
+        recorder,
+        ..Store::default()
+    });
     Router::new()
+        .route("/v2/account", get(account))
         .route("/v2/regions", get(regions))
         .route("/v2/regions/{id}/availability", get(availability))
         .route("/v2/plans", get(plans))
@@ -40,6 +45,31 @@ pub fn router() -> Router {
         .route("/v2/vpcs", post(create_vpc).get(list_vpcs))
         .route("/v2/vpcs/{id}", delete(delete_vpc))
         .with_state(store)
+}
+
+/// The permissions (`acls`) belong to the user the API key was issued for;
+/// `provisioning` is "Deploy New Servers".
+async fn account(headers: HeaderMap) -> Json<Value> {
+    let acls = if crate::bearer(&headers) == Some(crate::READ_ONLY_TOKEN) {
+        json!(["subscriptions_view", "support"])
+    } else {
+        json!([
+            "subscriptions_view",
+            "subscriptions",
+            "provisioning",
+            "billing",
+            "support"
+        ])
+    };
+    Json(json!({ "account": {
+        "name": "Example Account",
+        "email": "admin@example.com",
+        "acls": acls,
+        "balance": -100.0,
+        "pending_charges": 5.0,
+        "last_payment_date": "2026-01-01T00:00:00+00:00",
+        "last_payment_amount": -100.0,
+    }}))
 }
 
 async fn regions() -> Json<Value> {
@@ -80,6 +110,20 @@ async fn create_instance(
         ));
     }
     let id = Uuid::new_v4().to_string();
+    // Vultr only accepts user data base64-encoded.
+    if let Some(received) = body["user_data"].as_str() {
+        let Some(script) = crate::decode_base64_user_data(received) else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(
+                    json!({ "error": "Invalid user_data: must be base64 encoded.", "status": 400 }),
+                ),
+            ));
+        };
+        store
+            .recorder
+            .user_data("vultr", &id, received, &script, "base64");
+    }
     let record = json!({
         "id": id,
         "label": body["label"],

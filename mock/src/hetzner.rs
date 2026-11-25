@@ -15,6 +15,7 @@ use std::{
 
 #[derive(Default)]
 struct Store {
+    recorder: crate::Recorder,
     next_id: AtomicU64,
     servers: Mutex<HashMap<u64, Value>>,
     volumes: Mutex<HashMap<u64, Value>>,
@@ -29,8 +30,11 @@ impl Store {
 
 type S = State<Arc<Store>>;
 
-pub fn router() -> Router {
-    let store = Arc::new(Store::default());
+pub fn router(recorder: crate::Recorder) -> Router {
+    let store = Arc::new(Store {
+        recorder,
+        ..Store::default()
+    });
     Router::new()
         .route("/v1/locations", get(locations))
         .route("/v1/server_types", get(server_types))
@@ -97,6 +101,10 @@ async fn create_server(
         "public_net": { "ipv4": { "ip": format!("203.0.113.{}", id % 254 + 1) } },
         "private_net": [],
     });
+    // Hetzner takes cloud-init user data as a plain string.
+    if let Some(ud) = body["user_data"].as_str() {
+        store.recorder.plain_user_data("hetzner", id, ud);
+    }
     store.servers.lock().unwrap().insert(id, record.clone());
     Ok(Json(json!({ "server": record })))
 }

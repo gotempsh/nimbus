@@ -14,12 +14,105 @@ mod vultr;
 
 use axum::{
     body::Body,
+    extract::{Path, State},
     http::{HeaderMap, Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
+    routing::get,
     Json, Router,
 };
-use serde_json::json;
+use base64::Engine;
+use serde_json::{json, Value};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+/// Path prefix of the mock's own inspection endpoints. Not part of any
+/// provider's API, and exempt from the auth gate.
+const INSPECT_PREFIX: &str = "/_mock";
+
+/// What each provider mock received as first-boot user data, keyed by
+/// (provider id, instance id). Lets a test assert that a script actually
+/// reached the provider, in the wire format that provider's API expects.
+#[derive(Clone, Default)]
+pub(crate) struct Recorder {
+    user_data: Arc<Mutex<HashMap<(String, String), Value>>>,
+    /// Every provider request served, in order: `(method, path)`.
+    requests: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+impl Recorder {
+    /// `received` is the value exactly as it arrived on the wire; `script`
+    /// is the text after undoing the provider's encoding.
+    pub(crate) fn user_data(
+        &self,
+        provider: &str,
+        instance_id: impl ToString,
+        received: &str,
+        script: &str,
+        encoding: &str,
+    ) {
+        let instance_id = instance_id.to_string();
+        let record = json!({
+            "provider": provider,
+            "instance_id": instance_id,
+            "encoding": encoding,
+            "received": received,
+            "script": script,
+        });
+        self.user_data
+            .lock()
+            .unwrap()
+            .insert((provider.to_owned(), instance_id), record);
+    }
+
+    /// For APIs that carry user data as plain text.
+    pub(crate) fn plain_user_data(&self, provider: &str, instance_id: impl ToString, text: &str) {
+        self.user_data(provider, instance_id, text, text, "plain");
+    }
+}
+
+/// Decodes user data for the APIs that only accept it base64-encoded
+/// (Vultr, Linode). `None` means the client sent something else — the real
+/// APIs reject that, so the mocks do too.
+pub(crate) fn decode_base64_user_data(received: &str) -> Option<String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(received)
+        .ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// `GET /_mock/{provider}/instances/{id}/user-data` — 404 when that instance
+/// was created without user data (or doesn't exist).
+async fn inspect_user_data(
+    State(recorder): State<Recorder>,
+    Path((provider, id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    recorder
+        .user_data
+        .lock()
+        .unwrap()
+        .get(&(provider, id))
+        .cloned()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+/// `GET /_mock/requests` — every provider request served so far, in order,
+/// as `[{"method": "GET", "path": "/v2/account"}, ...]`. Lets a test assert
+/// that an operation which must be read-only never sent a write.
+async fn inspect_requests(State(recorder): State<Recorder>) -> Json<Value> {
+    Json(
+        recorder
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(method, path)| json!({ "method": method, "path": path }))
+            .collect(),
+    )
+}
 
 /// Router serving all provider mocks on distinct path prefixes so one bound
 /// port covers everything: `/v1` Hetzner, `/v2` Vultr, `/1.0` OVH,
@@ -31,38 +124,77 @@ use serde_json::json;
 /// token `bad-token` with 401 (each provider's real auth header is checked),
 /// and each create-server handler rejects unknown instance types with the
 /// provider's real error status and body shape.
+///
+/// Credential checks: each mock serves the account or introspection endpoint
+/// its adapter's `check_credential` reads. Besides `bad-token`, the sentinel
+/// `read-only-token` authenticates but is reported as unable to create
+/// instances wherever the real API can express that (Vultr: no
+/// `provisioning` ACL; OVH: GET-only access rules; Linode: read-only scopes;
+/// DigitalOcean: locked account; Hostinger: no usable payment method).
+/// Linode also has `restricted-token` (user without the `add_linodes` grant)
+/// and Scaleway `no-access-token` (403 on Instances); OVH project ids
+/// `missing-project` and `suspended-project` model those project states.
+///
+/// Inspection (no credential needed):
+/// - `GET /_mock/{provider}/instances/{id}/user-data` returns the user data
+///   that instance was created with — as received on the wire (`received`)
+///   and decoded back to text (`script`) — so tests can assert a first-boot
+///   script arrived.
+/// - `GET /_mock/requests` lists every provider request served so far.
 pub fn router() -> Router {
+    let recorder = Recorder::default();
     Router::new()
-        .merge(hetzner::router())
-        .merge(vultr::router())
-        .merge(ovh::router())
-        .merge(digitalocean::router())
-        .merge(linode::router())
-        .merge(scaleway::router())
+        .merge(hetzner::router(recorder.clone()))
+        .merge(vultr::router(recorder.clone()))
+        .merge(ovh::router(recorder.clone()))
+        .merge(digitalocean::router(recorder.clone()))
+        .merge(linode::router(recorder.clone()))
+        .merge(scaleway::router(recorder.clone()))
         .merge(hostinger::router())
-        .layer(axum::middleware::from_fn(auth_gate))
+        .merge(
+            Router::new()
+                .route(
+                    "/_mock/{provider}/instances/{id}/user-data",
+                    get(inspect_user_data),
+                )
+                .route("/_mock/requests", get(inspect_requests))
+                .with_state(recorder.clone()),
+        )
+        .layer(axum::middleware::from_fn_with_state(recorder, auth_gate))
 }
 
 fn token_ok(token: Option<&str>) -> bool {
     matches!(token, Some(t) if !t.is_empty() && t != "bad-token")
 }
 
-fn bearer(headers: &HeaderMap) -> Option<&str> {
+/// Authenticates, but is reported as unable to create instances by the
+/// mocks whose real API can express that. See [`router`].
+pub(crate) const READ_ONLY_TOKEN: &str = "read-only-token";
+
+pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
 }
 
-fn header<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
+pub(crate) fn header<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
     headers.get(name).and_then(|v| v.to_str().ok())
 }
 
 /// Checks the auth header each real API uses: bearer tokens for
 /// Hetzner/Vultr/DO/Linode/Hostinger, `X-Ovh-Consumer` for OVH (signatures
 /// are NOT verified), `X-Auth-Token` for Scaleway.
-async fn auth_gate(req: Request<Body>, next: Next) -> Response {
+async fn auth_gate(State(recorder): State<Recorder>, req: Request<Body>, next: Next) -> Response {
     let path = req.uri().path();
+    if path.starts_with(INSPECT_PREFIX) {
+        return next.run(req).await;
+    }
+    recorder
+        .requests
+        .lock()
+        .unwrap()
+        .push((req.method().to_string(), path.to_owned()));
     let headers = req.headers();
     let ok = if path.starts_with("/1.0") {
         token_ok(header(headers, "x-ovh-consumer"))
@@ -85,7 +217,7 @@ async fn auth_gate(req: Request<Body>, next: Next) -> Response {
 /// Binds an ephemeral local port and serves `router()` in the background.
 /// Returns the bare `http://127.0.0.1:<port>` root — each adapter's `base`
 /// includes its own version segment (`/v1`, `/v2`, `/1.0`), so callers pass
-/// `with_base_url(format!("{root}/v1"))` etc. See `mock/README.md`.
+/// `with_base_url(format!("{root}/v1"))` etc.
 pub async fn spawn() -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

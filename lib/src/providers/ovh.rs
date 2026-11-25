@@ -3,9 +3,10 @@
 //! secret + a per-user consumer key) and scopes everything under a project
 //! (`serviceName`). Endpoint is regional: eu/ca/us — default eu.
 
+use super::Probe;
 use crate::{
-    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
-    InstanceStatus, InstanceType, Network, Region, Result, Volume,
+    Capability, CloudProvider, CreateInstance, CreateNetwork, CreateVolume, CredentialCheck, Error,
+    Image, Instance, InstanceStatus, InstanceType, Network, Region, Result, Volume,
 };
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
@@ -78,14 +79,15 @@ impl Ovh {
         format!("$1${}", hex::encode(hasher.finalize()))
     }
 
-    async fn request(
+    /// Builds a request carrying OVH's four signing headers.
+    fn signed(
         &self,
         method: reqwest::Method,
         path: &str,
-        body: Option<Value>,
-    ) -> Result<Value> {
+        body: Option<&Value>,
+    ) -> reqwest::RequestBuilder {
         let url = format!("{}{path}", self.endpoint);
-        let body_str = body.as_ref().map(|b| b.to_string()).unwrap_or_default();
+        let body_str = body.map(|b| b.to_string()).unwrap_or_default();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -99,10 +101,25 @@ impl Ovh {
             .header("X-Ovh-Consumer", &self.consumer_key)
             .header("X-Ovh-Signature", signature)
             .header("X-Ovh-Timestamp", timestamp.to_string());
-        if let Some(b) = &body {
+        if let Some(b) = body {
             req = req.json(b);
         }
-        let resp = req.send().await?;
+        req
+    }
+
+    /// A signed GET whose status the caller inspects itself — used by
+    /// `check_credential`, where a refusal is a finding rather than an error.
+    async fn probe(&self, path: &str) -> Result<Probe> {
+        Probe::send(self.signed(reqwest::Method::GET, path, None)).await
+    }
+
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        let resp = self.signed(method, path, body.as_ref()).send().await?;
         let status = resp.status();
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
             return Err(Error::Auth { provider: PROVIDER });
@@ -132,6 +149,38 @@ impl Ovh {
     async fn get(&self, path: &str) -> Result<Value> {
         self.request(reqwest::Method::GET, path, None).await
     }
+}
+
+/// Whether any of a credential's access rules (`{"method", "path"}`, where
+/// `*` in a path matches any run of characters) permits `method` on `path`.
+fn rules_allow(rules: &[Value], method: &str, path: &str) -> bool {
+    rules.iter().any(|rule| {
+        rule["method"].as_str() == Some(method)
+            && rule["path"]
+                .as_str()
+                .is_some_and(|pattern| glob_matches(pattern, path))
+    })
+}
+
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let mut parts = pattern.split('*');
+    // `split` always yields at least one item.
+    let first = parts.next().unwrap_or_default();
+    let Some(mut rest) = text.strip_prefix(first) else {
+        return false;
+    };
+    let mut parts: Vec<&str> = parts.collect();
+    let Some(last) = parts.pop() else {
+        // No `*` at all: the pattern is a literal path.
+        return rest.is_empty();
+    };
+    for part in parts {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
+    }
+    rest.ends_with(last)
 }
 
 fn instance_status(s: &str) -> InstanceStatus {
@@ -225,6 +274,97 @@ impl CloudProvider for Ovh {
                 name: i["name"].as_str().unwrap_or_default().to_owned(),
             })
             .collect())
+    }
+
+    /// OVH has a real introspection endpoint: `GET /auth/currentCredential`
+    /// returns the consumer key's state and the method+path rules it was
+    /// granted. Creating an instance needs `POST` on the project's `/sshkey`
+    /// and `/instance` paths; the project itself must exist and be `ok`.
+    async fn check_credential(&self) -> Result<CredentialCheck> {
+        let mut checks = vec!["GET /auth/currentCredential"];
+        let credential = self.probe("/auth/currentCredential").await?;
+        let rules_allow = match credential.status {
+            s if s.is_success() => {
+                let state = credential.body["status"].as_str().unwrap_or("unknown");
+                if state != "validated" {
+                    let advice = match state {
+                        "pendingValidation" => "open the validation URL OVHcloud issued with the consumer key and approve it",
+                        "expired" => "it has expired; request a new consumer key",
+                        "refused" => "the request for it was refused; request a new consumer key",
+                        _ => "request a new consumer key",
+                    };
+                    return Ok(CredentialCheck::rejected(
+                        &checks,
+                        format!("OVHcloud recognises the consumer key but it is `{state}`, not `validated`: {advice}."),
+                    ));
+                }
+                let rules = credential.body["rules"].as_array().cloned().unwrap_or_default();
+                let allowed = |path: &str| rules_allow(&rules, "POST", path);
+                Some(
+                    allowed(&self.project_path("/sshkey"))
+                        && allowed(&self.project_path("/instance")),
+                )
+            }
+            // A valid credential that was simply not granted this one path.
+            StatusCode::FORBIDDEN
+                if credential.body["errorCode"].as_str() == Some("NOT_GRANTED_CALL") =>
+            {
+                None
+            }
+            StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                return Ok(CredentialCheck::rejected(
+                    &checks,
+                    format!(
+                        "OVHcloud rejected the credential: check that the application key, application secret and consumer key belong together and to this API endpoint (EU, CA and US accounts are separate){}.",
+                        credential.reason_suffix()
+                    ),
+                ))
+            }
+            _ => return Err(credential.unexpected(PROVIDER, checks[0])),
+        };
+
+        checks.push("GET /cloud/project/{project}");
+        let project = self.probe(&self.project_path("")).await?;
+        let project_state = match project.status {
+            s if s.is_success() => Some(
+                project.body["status"]
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_owned(),
+            ),
+            StatusCode::NOT_FOUND => Some("not found".to_owned()),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => None,
+            _ => return Err(project.unexpected(PROVIDER, "GET /cloud/project/{project}")),
+        };
+
+        let id = &self.project_id;
+        let (capability, detail) = match (rules_allow, project_state.as_deref()) {
+            (Some(false), _) => (
+                Capability::No,
+                format!("The credential is valid but its access rules do not allow POST on /cloud/project/{id}/sshkey and /cloud/project/{id}/instance, so it cannot create instances. Request a consumer key whose rules include POST (and GET, DELETE) on /cloud/project/{id}/*."),
+            ),
+            (_, Some("not found")) => (
+                Capability::No,
+                format!("The credential is valid but Public Cloud project {id} was not found for this account. Check the project id."),
+            ),
+            (_, Some(state)) if state != "ok" => (
+                Capability::No,
+                format!("The credential is valid but Public Cloud project {id} is `{state}`, not `ok`, so instances cannot be created in it."),
+            ),
+            (Some(true), Some(_)) => (
+                Capability::Yes,
+                format!("The credential is validated, its access rules allow creating SSH keys and instances in Public Cloud project {id}, and the project is `ok`."),
+            ),
+            (Some(true), None) => (
+                Capability::Unknown,
+                format!("The credential is validated and its access rules allow creating instances in Public Cloud project {id}, but they do not allow reading the project itself, so its state could not be checked."),
+            ),
+            (None, _) => (
+                Capability::Unknown,
+                "The credential is valid but was not granted access to /auth/currentCredential, so its access rules could not be read.".to_owned(),
+            ),
+        };
+        Ok(CredentialCheck::accepted(capability, &checks, detail))
     }
 
     async fn create_instance(&self, req: CreateInstance) -> Result<Instance> {
@@ -411,5 +551,62 @@ impl CloudProvider for Ovh {
         )
         .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glob_matches_ovh_rule_paths() {
+        for (pattern, path, expected) in [
+            ("/*", "/cloud/project/p1/instance", true),
+            ("/cloud/*", "/cloud/project/p1/instance", true),
+            ("/cloud/project/p1/*", "/cloud/project/p1/instance", true),
+            (
+                "/cloud/project/*/instance",
+                "/cloud/project/p1/instance",
+                true,
+            ),
+            (
+                "/cloud/project/p1/instance",
+                "/cloud/project/p1/instance",
+                true,
+            ),
+            (
+                "/cloud/project/p1/instance",
+                "/cloud/project/p1/instance/x",
+                false,
+            ),
+            ("/cloud/project/p2/*", "/cloud/project/p1/instance", false),
+            (
+                "/cloud/project/*/volume",
+                "/cloud/project/p1/instance",
+                false,
+            ),
+            ("/domain/*", "/cloud/project/p1/instance", false),
+            ("*", "/anything", true),
+            ("/cloud/*/p1/*", "/cloud/project/p1/instance", true),
+            (
+                "/cloud/*/instance",
+                "/cloud/project/p1/instance/instance",
+                true,
+            ),
+        ] {
+            assert_eq!(glob_matches(pattern, path), expected, "{pattern} vs {path}");
+        }
+    }
+
+    #[test]
+    fn rules_are_checked_per_method() {
+        let rules = vec![
+            json!({ "method": "GET", "path": "/*" }),
+            json!({ "method": "POST", "path": "/cloud/project/p1/sshkey" }),
+        ];
+        assert!(rules_allow(&rules, "GET", "/cloud/project/p1/instance"));
+        assert!(rules_allow(&rules, "POST", "/cloud/project/p1/sshkey"));
+        assert!(!rules_allow(&rules, "POST", "/cloud/project/p1/instance"));
+        assert!(!rules_allow(&[], "GET", "/"));
     }
 }

@@ -3,7 +3,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 #[derive(Default)]
 struct Store {
+    recorder: crate::Recorder,
     next_id: AtomicU64,
     droplets: Mutex<HashMap<u64, Value>>,
     volumes: Mutex<HashMap<String, Value>>,
@@ -33,9 +34,13 @@ impl Store {
 
 type S = State<Arc<Store>>;
 
-pub fn router() -> Router {
-    let store = Arc::new(Store::default());
+pub fn router(recorder: crate::Recorder) -> Router {
+    let store = Arc::new(Store {
+        recorder,
+        ..Store::default()
+    });
     Router::new()
+        .route("/do/v2/account", get(account))
         .route("/do/v2/regions", get(regions))
         .route("/do/v2/sizes", get(sizes))
         .route("/do/v2/images", get(images))
@@ -51,6 +56,27 @@ pub fn router() -> Router {
         .route("/do/v2/vpcs", post(create_vpc).get(list_vpcs))
         .route("/do/v2/vpcs/{id}", delete(delete_vpc))
         .with_state(store)
+}
+
+/// Account standing. The real API has no way to report a token's scopes,
+/// so `read-only-token` models the one thing this endpoint can rule a
+/// create out with: a locked account.
+async fn account(headers: HeaderMap) -> Json<Value> {
+    let (status, message) = if crate::bearer(&headers) == Some(crate::READ_ONLY_TOKEN) {
+        ("locked", "Your account has been locked.")
+    } else {
+        ("active", "")
+    };
+    Json(json!({ "account": {
+        "droplet_limit": 25,
+        "floating_ip_limit": 5,
+        "email": "admin@example.com",
+        "name": "Example Account",
+        "uuid": "00000000000000000000000000000000000000ff",
+        "email_verified": true,
+        "status": status,
+        "status_message": message,
+    }}))
 }
 
 async fn regions() -> Json<Value> {
@@ -107,6 +133,10 @@ async fn create_droplet(
             { "ip_address": format!("164.90.20.{}", id % 250 + 1), "type": "public" },
         ]},
     });
+    // DigitalOcean takes `user_data` as plain text.
+    if let Some(ud) = body["user_data"].as_str() {
+        store.recorder.plain_user_data("digitalocean", id, ud);
+    }
     store.droplets.lock().unwrap().insert(id, record.clone());
     Ok(Json(json!({ "droplet": record })))
 }

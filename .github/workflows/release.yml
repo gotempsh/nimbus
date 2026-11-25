@@ -1,0 +1,242 @@
+name: Release
+
+# Builds the `nimbus` CLI for every supported platform.
+#
+# - On a pushed version tag (v1.2.3) the archives and a SHA256SUMS file are
+#   attached to a GitHub release for that tag.
+# - On a pull request that touches the CLI, the SDK it is built from, or this
+#   file, everything up to (not including) the release runs, so a change that
+#   breaks one target is caught before it is tagged.
+#
+# Nothing here publishes to crates.io.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "cli/**"
+      - "lib/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_STRIP: symbols
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux binaries are statically linked against musl, so one archive
+          # runs on any distribution regardless of its glibc version.
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Install the musl C toolchain
+        if: contains(matrix.target, 'linux-musl')
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+
+      - name: Read the version
+        id: version
+        run: |
+          version="$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq --raw-output '.packages[] | select(.name == "nimbus") | .version')"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check the tag matches the version
+        if: github.event_name == 'push'
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::tag $TAG does not match the version in Cargo.toml ($VERSION)"
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build --release --locked --package nimbus --target ${{ matrix.target }}
+
+      - name: Smoke-test the binary
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          bin="$PWD/target/$TARGET/release/nimbus"
+          file "$bin"
+
+          # The Intel macOS binary is cross-compiled on an Apple silicon
+          # runner; it runs there only under Rosetta.
+          run=("$bin")
+          if [ "$TARGET" = "x86_64-apple-darwin" ] && [ "$(uname -m)" != "x86_64" ]; then
+            lipo -archs "$bin" | grep --quiet --word-regexp x86_64
+            if arch -x86_64 /usr/bin/true 2>/dev/null; then
+              run=(arch -x86_64 "$bin")
+            else
+              echo "::notice::Rosetta is not available on this runner; the $TARGET binary was built but not run"
+              exit 0
+            fi
+          fi
+          if [[ "$TARGET" == *linux-musl ]]; then
+            file "$bin" | grep --quiet --ignore-case static
+          fi
+
+          # Nothing below reads or writes an OS credential store: the file
+          # store is forced, in a throwaway directory.
+          export NIMBUS_CONFIG_DIR="$RUNNER_TEMP/nimbus-smoke"
+          export NIMBUS_CREDENTIAL_STORE=file
+
+          test "$("${run[@]}" --version)" = "nimbus $VERSION"
+
+          "${run[@]}" providers > providers.json
+          jq --exit-status 'length > 0 and all(.[]; .credentials.available == false)' providers.json
+
+          # A credential arrives on stdin, is stored owner-only, is reported
+          # as available, never appears in output, and is removed again.
+          secret="fake-smoke-test-token-0123456789"
+          printf '%s\n' "$secret" | "${run[@]}" login --provider hetzner --stdin > login.json
+          jq --exit-status '.stored == true and .store == "file"' login.json
+          "${run[@]}" providers > providers.json
+          jq --exit-status 'any(.[]; .id == "hetzner" and .credentials.source == "file")' providers.json
+          if grep --quiet "$secret" login.json providers.json; then
+            echo "::error::a stored secret was printed"
+            exit 1
+          fi
+          "${run[@]}" logout --provider hetzner | jq --exit-status '.removed == ["file"]'
+
+          # With nothing stored, the failure is JSON that names the command
+          # to run.
+          if "${run[@]}" --provider hetzner regions 2> error.json; then
+            echo "::error::expected a missing-credentials failure"
+            exit 1
+          fi
+          jq --exit-status '.error.kind == "missing_credentials"
+            and (.error.hint | contains("nimbus login --provider hetzner"))' error.json
+
+      - name: Smoke-test the fallback on a machine with no keyring
+        if: contains(matrix.target, 'linux-musl')
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          bin="$PWD/target/$TARGET/release/nimbus"
+          # The session bus address points at a socket that does not exist,
+          # which is what a server or container looks like: the Secret
+          # Service client runs for real and finds nothing to talk to.
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$RUNNER_TEMP/no-session-bus"
+          export NIMBUS_CONFIG_DIR="$RUNNER_TEMP/nimbus-fallback"
+          printf '%s\n' "fake-smoke-test-token-0123456789" \
+            | "$bin" login --provider hetzner --stdin > login.json
+          cat login.json
+          jq --exit-status '.store == "file" and (.fallback_reason | type == "string")' login.json
+          test "$(stat --format '%a' "$NIMBUS_CONFIG_DIR/credentials.json")" = "600"
+          "$bin" logout --provider hetzner | jq --exit-status '.removed == ["file"]'
+
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p stage dist
+          cp "target/$TARGET/release/nimbus" LICENSE README.md stage/
+          tar -C stage -czf "dist/nimbus-$TARGET.tar.gz" nimbus LICENSE README.md
+          tar -tzf "dist/nimbus-$TARGET.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nimbus-${{ matrix.target }}
+          path: dist/nimbus-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  checksums:
+    name: Checksums
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: nimbus-*
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          test "$(ls nimbus-*.tar.gz | wc -l)" -eq 4
+          sha256sum nimbus-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum --check SHA256SUMS
+          # The check the README tells people to run, as they run it: with
+          # one archive downloaded next to the checksums file.
+          mkdir one && cp SHA256SUMS nimbus-x86_64-unknown-linux-musl.tar.gz one/
+          (cd one && sha256sum --check --ignore-missing SHA256SUMS)
+          rm -r one
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SHA256SUMS
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish the GitHub release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [build, checksums]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ls -l dist
+          (cd dist && sha256sum --check SHA256SUMS)
+          prerelease=()
+          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes \
+            "${prerelease[@]}" dist/nimbus-*.tar.gz dist/SHA256SUMS

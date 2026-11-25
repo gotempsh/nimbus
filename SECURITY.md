@@ -21,10 +21,13 @@ Include:
 - Steps to reproduce (a minimal proof of concept, if possible)
 - The affected version(s)
 
-Note that nimbus handles cloud provider credentials passed in by the caller:
-it never persists them, but bugs that could leak a credential into logs,
-error messages, or request URLs are considered security issues — report
-those privately too.
+Note that nimbus handles cloud provider credentials. The library only ever
+receives them from its caller and never persists them. The CLI persists them
+only when asked to by `nimbus login`: in the operating system's credential
+store, or — on machines without one — in an owner-only file in its config
+directory. Bugs that could leak a credential into command output, logs,
+error messages, or request URLs, or that store one somewhere readable by
+other users, are considered security issues — report those privately too.
 
 We aim to acknowledge reports within 3 business days and to disclose fixed
 vulnerabilities via a security advisory once a patch is released.
