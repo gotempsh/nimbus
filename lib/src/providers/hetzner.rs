@@ -1,9 +1,10 @@
 //! Hetzner Cloud adapter. API docs: https://docs.hetzner.cloud/
 //! Flat REST + bearer token, no request signing.
 
+use super::Probe;
 use crate::{
-    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
-    InstanceStatus, InstanceType, Network, Region, Result, Volume,
+    Capability, CloudProvider, CreateInstance, CreateNetwork, CreateVolume, CredentialCheck, Error,
+    Image, Instance, InstanceStatus, InstanceType, Network, Region, Result, Volume,
 };
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
@@ -68,6 +69,17 @@ impl Hetzner {
 
     async fn get(&self, path: &str) -> Result<Value> {
         self.request(reqwest::Method::GET, path, None).await
+    }
+
+    /// A GET whose status and headers the caller inspects itself — used by
+    /// `check_credential`, where a refusal is a finding rather than an error.
+    async fn probe(&self, path: &str) -> Result<Probe> {
+        Probe::send(
+            self.client
+                .get(format!("{}{path}", self.base))
+                .bearer_auth(&self.token),
+        )
+        .await
     }
 }
 
@@ -171,6 +183,38 @@ impl CloudProvider for Hetzner {
                 name: i["description"].as_str().unwrap_or_default().to_owned(),
             })
             .collect())
+    }
+
+    /// Hetzner has no account or token-introspection endpoint. Listing
+    /// servers proves the token is valid for its project (unlike some
+    /// providers, nothing here is public), but a token is either read-only
+    /// or read-write and the API only reveals which by refusing a write.
+    async fn check_credential(&self) -> Result<CredentialCheck> {
+        let checks = ["GET /servers"];
+        let probe = self.probe("/servers?per_page=1").await?;
+        Ok(match probe.status {
+            s if s.is_success() => CredentialCheck::accepted(
+                Capability::Unknown,
+                &checks,
+                "The token is valid for its Hetzner Cloud project. Hetzner tokens are either read-only or read-write and the API has no endpoint that reports which — a read-only token is only refused on its first write — so permission to create servers cannot be confirmed without creating one.",
+            ),
+            StatusCode::UNAUTHORIZED => CredentialCheck::rejected(
+                &checks,
+                format!(
+                    "Hetzner rejected the token: it is invalid, mistyped or has been deleted{}.",
+                    probe.reason_suffix()
+                ),
+            ),
+            StatusCode::FORBIDDEN => CredentialCheck::accepted(
+                Capability::Unknown,
+                &checks,
+                format!(
+                    "The token is valid but was refused permission to list servers{}.",
+                    probe.reason_suffix()
+                ),
+            ),
+            _ => return Err(probe.unexpected(PROVIDER, checks[0])),
+        })
     }
 
     async fn create_instance(&self, req: CreateInstance) -> Result<Instance> {

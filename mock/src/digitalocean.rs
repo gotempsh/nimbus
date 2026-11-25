@@ -3,7 +3,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -40,6 +40,7 @@ pub fn router(recorder: crate::Recorder) -> Router {
         ..Store::default()
     });
     Router::new()
+        .route("/do/v2/account", get(account))
         .route("/do/v2/regions", get(regions))
         .route("/do/v2/sizes", get(sizes))
         .route("/do/v2/images", get(images))
@@ -55,6 +56,27 @@ pub fn router(recorder: crate::Recorder) -> Router {
         .route("/do/v2/vpcs", post(create_vpc).get(list_vpcs))
         .route("/do/v2/vpcs/{id}", delete(delete_vpc))
         .with_state(store)
+}
+
+/// Account standing. The real API has no way to report a token's scopes,
+/// so `read-only-token` models the one thing this endpoint can rule a
+/// create out with: a locked account.
+async fn account(headers: HeaderMap) -> Json<Value> {
+    let (status, message) = if crate::bearer(&headers) == Some(crate::READ_ONLY_TOKEN) {
+        ("locked", "Your account has been locked.")
+    } else {
+        ("active", "")
+    };
+    Json(json!({ "account": {
+        "droplet_limit": 25,
+        "floating_ip_limit": 5,
+        "email": "admin@example.com",
+        "name": "Example Account",
+        "uuid": "00000000000000000000000000000000000000ff",
+        "email_verified": true,
+        "status": status,
+        "status_message": message,
+    }}))
 }
 
 async fn regions() -> Json<Value> {

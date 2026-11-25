@@ -1,10 +1,10 @@
 //! Vultr adapter. API docs: https://www.vultr.com/api/
 //! Flat REST + bearer token, no request signing.
 
-use super::base64_encode;
+use super::{base64_encode, Probe};
 use crate::{
-    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
-    InstanceStatus, InstanceType, Network, Region, Result, Volume,
+    Capability, CloudProvider, CreateInstance, CreateNetwork, CreateVolume, CredentialCheck, Error,
+    Image, Instance, InstanceStatus, InstanceType, Network, Region, Result, Volume,
 };
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
@@ -75,6 +75,17 @@ impl Vultr {
 
     async fn get(&self, path: &str) -> Result<Value> {
         self.request(reqwest::Method::GET, path, None).await
+    }
+
+    /// A GET whose status and headers the caller inspects itself — used by
+    /// `check_credential`, where a refusal is a finding rather than an error.
+    async fn probe(&self, path: &str) -> Result<Probe> {
+        Probe::send(
+            self.client
+                .get(format!("{}{path}", self.base))
+                .bearer_auth(&self.token),
+        )
+        .await
     }
 }
 
@@ -176,6 +187,59 @@ impl CloudProvider for Vultr {
                 name: o["name"].as_str().unwrap_or_default().to_owned(),
             })
             .collect())
+    }
+
+    /// `GET /account` needs a valid key (unlike `/regions` and `/plans`,
+    /// which Vultr serves without one) and returns the permissions (`acls`)
+    /// of the user the key belongs to. `provisioning` is Vultr's "Deploy New
+    /// Servers" permission; `manage_users` overrides all the others.
+    async fn check_credential(&self) -> Result<CredentialCheck> {
+        let checks = ["GET /account"];
+        let probe = self.probe("/account").await?;
+        Ok(match probe.status {
+            s if s.is_success() => {
+                let acls: Option<Vec<&str>> = probe.body["account"]["acls"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(Value::as_str).collect());
+                match acls {
+                    Some(acls)
+                        if acls.contains(&"provisioning") || acls.contains(&"manage_users") =>
+                    {
+                        CredentialCheck::accepted(
+                            Capability::Yes,
+                            &checks,
+                            "The API key is valid and its user has the permission to deploy new servers (`provisioning`).",
+                        )
+                    }
+                    Some(_) => CredentialCheck::accepted(
+                        Capability::No,
+                        &checks,
+                        "The API key is valid but its user lacks the `provisioning` permission (\"Deploy New Servers\"), so it cannot create instances. Grant that permission to the user in the Vultr customer portal, or use an API key of a user that has it.",
+                    ),
+                    None => CredentialCheck::accepted(
+                        Capability::Unknown,
+                        &checks,
+                        "The API key is valid, but the account response did not list its permissions (`acls`), so permission to create instances could not be read.",
+                    ),
+                }
+            }
+            StatusCode::UNAUTHORIZED => CredentialCheck::rejected(
+                &checks,
+                format!(
+                    "Vultr rejected the API key: it is invalid, or this machine's IP address is not in the key's access control list{}.",
+                    probe.reason_suffix()
+                ),
+            ),
+            StatusCode::FORBIDDEN => CredentialCheck::accepted(
+                Capability::Unknown,
+                &checks,
+                format!(
+                    "The API key is valid but may not read account information, so its permissions could not be read{}.",
+                    probe.reason_suffix()
+                ),
+            ),
+            _ => return Err(probe.unexpected(PROVIDER, checks[0])),
+        })
     }
 
     async fn create_instance(&self, req: CreateInstance) -> Result<Instance> {

@@ -5,7 +5,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -40,6 +40,7 @@ pub fn router() -> Router {
         .route("/api/vps/v1/data-centers", get(data_centers))
         .route("/api/vps/v1/templates", get(templates))
         .route("/api/billing/v1/catalog", get(catalog))
+        .route("/api/billing/v1/payment-methods", get(payment_methods))
         .route(
             "/api/vps/v1/virtual-machines",
             post(create_vm).get(list_vms),
@@ -89,6 +90,25 @@ async fn catalog() -> Json<Value> {
             ],
         },
     ]))
+}
+
+/// Hostinger tokens are unscoped, so what decides whether a purchase can go
+/// through is the payment method it would be charged to. `read-only-token`
+/// models an account whose only method has expired.
+async fn payment_methods(headers: HeaderMap) -> Json<Value> {
+    let expired = crate::bearer(&headers) == Some(crate::READ_ONLY_TOKEN);
+    Json(json!([{
+        "id": 9693613,
+        "name": "Credit Card",
+        "identifier": "1111",
+        "payment_method": "card",
+        "is_default": true,
+        "is_expired": expired,
+        "is_suspended": false,
+        "created_at": "2026-01-01T00:00:00Z",
+        "expires_at": "2031-01-01T00:00:00Z",
+        "suspended_at": null,
+    }]))
 }
 
 async fn create_vm(

@@ -7,9 +7,10 @@
 //! is not part of create-server: it is set per key on the stopped server
 //! before that first boot.
 
+use super::Probe;
 use crate::{
-    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
-    InstanceStatus, InstanceType, Network, Region, Result, Volume,
+    Capability, CloudProvider, CreateInstance, CreateNetwork, CreateVolume, CredentialCheck, Error,
+    Image, Instance, InstanceStatus, InstanceType, Network, Region, Result, Volume,
 };
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
@@ -261,6 +262,48 @@ impl CloudProvider for Scaleway {
                 name: i["name"].as_str().unwrap_or_default().to_owned(),
             })
             .collect())
+    }
+
+    /// `regions()` is a static list here, so it proves nothing. Listing the
+    /// project's servers does need a valid key with read access to Instances.
+    /// A key's permissions, though, cannot be read from the secret key alone:
+    /// the IAM API looks keys up by access key and needs IAM read rights.
+    async fn check_credential(&self) -> Result<CredentialCheck> {
+        let checks = ["GET /instance/v1/zones/{zone}/servers"];
+        let path = self.instance_path(&format!("/servers?per_page=1&project={}", self.project_id));
+        let probe = Probe::send(
+            self.client
+                .get(format!("{}{path}", self.base))
+                .header("X-Auth-Token", &self.secret_key),
+        )
+        .await?;
+        let (project, zone) = (&self.project_id, &self.zone);
+        Ok(match probe.status {
+            s if s.is_success() => CredentialCheck::accepted(
+                Capability::Unknown,
+                &checks,
+                format!("The secret key is valid and may list Instances in project {project} (zone {zone}). Scaleway offers no way to read a key's permissions from the secret key alone, so permission to create Instances cannot be confirmed without creating one."),
+            ),
+            StatusCode::UNAUTHORIZED => CredentialCheck::rejected(
+                &checks,
+                format!(
+                    "Scaleway rejected the secret key: it is invalid, expired or has been deleted{}.",
+                    probe.reason_suffix()
+                ),
+            ),
+            // Creating an instance here ends by reading it back, so a key
+            // refused read access cannot complete a create through nimbus
+            // whatever else it is allowed to do.
+            StatusCode::FORBIDDEN => CredentialCheck::accepted(
+                Capability::No,
+                &checks,
+                format!(
+                    "The secret key is valid but is refused access to Instances in project {project} (zone {zone}){}. Give the key's IAM policy the InstancesFullAccess permission set on that project, and check the project id.",
+                    probe.reason_suffix()
+                ),
+            ),
+            _ => return Err(probe.unexpected(PROVIDER, checks[0])),
+        })
     }
 
     async fn create_instance(&self, req: CreateInstance) -> Result<Instance> {

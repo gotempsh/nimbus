@@ -36,7 +36,11 @@ const INSPECT_PREFIX: &str = "/_mock";
 /// (provider id, instance id). Lets a test assert that a script actually
 /// reached the provider, in the wire format that provider's API expects.
 #[derive(Clone, Default)]
-pub(crate) struct Recorder(Arc<Mutex<HashMap<(String, String), Value>>>);
+pub(crate) struct Recorder {
+    user_data: Arc<Mutex<HashMap<(String, String), Value>>>,
+    /// Every provider request served, in order: `(method, path)`.
+    requests: Arc<Mutex<Vec<(String, String)>>>,
+}
 
 impl Recorder {
     /// `received` is the value exactly as it arrived on the wire; `script`
@@ -57,7 +61,7 @@ impl Recorder {
             "received": received,
             "script": script,
         });
-        self.0
+        self.user_data
             .lock()
             .unwrap()
             .insert((provider.to_owned(), instance_id), record);
@@ -86,13 +90,28 @@ async fn inspect_user_data(
     Path((provider, id)): Path<(String, String)>,
 ) -> Result<Json<Value>, StatusCode> {
     recorder
-        .0
+        .user_data
         .lock()
         .unwrap()
         .get(&(provider, id))
         .cloned()
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
+}
+
+/// `GET /_mock/requests` — every provider request served so far, in order,
+/// as `[{"method": "GET", "path": "/v2/account"}, ...]`. Lets a test assert
+/// that an operation which must be read-only never sent a write.
+async fn inspect_requests(State(recorder): State<Recorder>) -> Json<Value> {
+    Json(
+        recorder
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(method, path)| json!({ "method": method, "path": path }))
+            .collect(),
+    )
 }
 
 /// Router serving all provider mocks on distinct path prefixes so one bound
@@ -106,10 +125,22 @@ async fn inspect_user_data(
 /// and each create-server handler rejects unknown instance types with the
 /// provider's real error status and body shape.
 ///
-/// Inspection: `GET /_mock/{provider}/instances/{id}/user-data` returns the
-/// user data that instance was created with — as received on the wire
-/// (`received`) and decoded back to text (`script`) — so tests can assert a
-/// first-boot script arrived. No credential needed.
+/// Credential checks: each mock serves the account or introspection endpoint
+/// its adapter's `check_credential` reads. Besides `bad-token`, the sentinel
+/// `read-only-token` authenticates but is reported as unable to create
+/// instances wherever the real API can express that (Vultr: no
+/// `provisioning` ACL; OVH: GET-only access rules; Linode: read-only scopes;
+/// DigitalOcean: locked account; Hostinger: no usable payment method).
+/// Linode also has `restricted-token` (user without the `add_linodes` grant)
+/// and Scaleway `no-access-token` (403 on Instances); OVH project ids
+/// `missing-project` and `suspended-project` model those project states.
+///
+/// Inspection (no credential needed):
+/// - `GET /_mock/{provider}/instances/{id}/user-data` returns the user data
+///   that instance was created with — as received on the wire (`received`)
+///   and decoded back to text (`script`) — so tests can assert a first-boot
+///   script arrived.
+/// - `GET /_mock/requests` lists every provider request served so far.
 pub fn router() -> Router {
     let recorder = Recorder::default();
     Router::new()
@@ -126,35 +157,46 @@ pub fn router() -> Router {
                     "/_mock/{provider}/instances/{id}/user-data",
                     get(inspect_user_data),
                 )
-                .with_state(recorder),
+                .route("/_mock/requests", get(inspect_requests))
+                .with_state(recorder.clone()),
         )
-        .layer(axum::middleware::from_fn(auth_gate))
+        .layer(axum::middleware::from_fn_with_state(recorder, auth_gate))
 }
 
 fn token_ok(token: Option<&str>) -> bool {
     matches!(token, Some(t) if !t.is_empty() && t != "bad-token")
 }
 
-fn bearer(headers: &HeaderMap) -> Option<&str> {
+/// Authenticates, but is reported as unable to create instances by the
+/// mocks whose real API can express that. See [`router`].
+pub(crate) const READ_ONLY_TOKEN: &str = "read-only-token";
+
+pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
 }
 
-fn header<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
+pub(crate) fn header<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
     headers.get(name).and_then(|v| v.to_str().ok())
 }
 
 /// Checks the auth header each real API uses: bearer tokens for
 /// Hetzner/Vultr/DO/Linode/Hostinger, `X-Ovh-Consumer` for OVH (signatures
 /// are NOT verified), `X-Auth-Token` for Scaleway.
-async fn auth_gate(req: Request<Body>, next: Next) -> Response {
+async fn auth_gate(State(recorder): State<Recorder>, req: Request<Body>, next: Next) -> Response {
     let path = req.uri().path();
+    if path.starts_with(INSPECT_PREFIX) {
+        return next.run(req).await;
+    }
+    recorder
+        .requests
+        .lock()
+        .unwrap()
+        .push((req.method().to_string(), path.to_owned()));
     let headers = req.headers();
-    let ok = if path.starts_with(INSPECT_PREFIX) {
-        true
-    } else if path.starts_with("/1.0") {
+    let ok = if path.starts_with("/1.0") {
         token_ok(header(headers, "x-ovh-consumer"))
     } else if path.starts_with("/instance") || path.starts_with("/iam") || path.starts_with("/vpc")
     {

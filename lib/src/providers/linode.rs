@@ -1,10 +1,10 @@
 //! Linode (Akamai) adapter. API docs: https://techdocs.akamai.com/linode-api/
 //! Flat REST + bearer token, no request signing.
 
-use super::base64_encode;
+use super::{base64_encode, Probe};
 use crate::{
-    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
-    InstanceStatus, InstanceType, Network, Region, Result, Volume,
+    Capability, CloudProvider, CreateInstance, CreateNetwork, CreateVolume, CredentialCheck, Error,
+    Image, Instance, InstanceStatus, InstanceType, Network, Region, Result, Volume,
 };
 use async_trait::async_trait;
 use rand::Rng;
@@ -74,6 +74,17 @@ impl Linode {
     async fn get(&self, path: &str) -> Result<Value> {
         self.request(reqwest::Method::GET, path, None).await
     }
+
+    /// A GET whose status and headers the caller inspects itself — used by
+    /// `check_credential`, where a refusal is a finding rather than an error.
+    async fn probe(&self, path: &str) -> Result<Probe> {
+        Probe::send(
+            self.client
+                .get(format!("{}{path}", self.base))
+                .bearer_auth(&self.token),
+        )
+        .await
+    }
 }
 
 fn instance_status(s: &str) -> InstanceStatus {
@@ -108,6 +119,14 @@ fn parse_instance(v: &Value) -> Instance {
         ssh_user: "root".to_owned(),
         ssh_port: 22,
     }
+}
+
+/// Whether an `X-OAuth-Scopes` value (`*`, or a list such as
+/// `images:read_write, linodes:read_only`) lets the token create Linodes.
+fn scopes_allow_create(scopes: &str) -> bool {
+    scopes
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .any(|s| s == "*" || s == "linodes:read_write")
 }
 
 /// Linode requires a root password at create time even when SSH keys are
@@ -175,6 +194,91 @@ impl CloudProvider for Linode {
                 name: i["label"].as_str().unwrap_or_default().to_owned(),
             })
             .collect())
+    }
+
+    /// Two things decide whether a Linode token can create an instance, and
+    /// the API exposes both without needing any particular scope:
+    ///
+    /// - the token's own scopes, echoed on every response in the
+    ///   `X-OAuth-Scopes` header (`*` or `linodes:read_write` is needed);
+    /// - for a restricted user, the `add_linodes` grant from
+    ///   `GET /profile/grants` (unrestricted users have every grant).
+    async fn check_credential(&self) -> Result<CredentialCheck> {
+        let mut checks = vec!["GET /profile"];
+        let profile = self.probe("/profile").await?;
+        match profile.status {
+            s if s.is_success() => {}
+            StatusCode::UNAUTHORIZED => {
+                return Ok(CredentialCheck::rejected(
+                    &checks,
+                    format!(
+                        "Linode rejected the token: it is invalid, expired or has been revoked{}.",
+                        profile.reason_suffix()
+                    ),
+                ))
+            }
+            StatusCode::FORBIDDEN => {
+                return Ok(CredentialCheck::accepted(
+                    Capability::Unknown,
+                    &checks,
+                    format!(
+                        "The token is valid but was refused access to its own profile, so its permissions could not be read{}.",
+                        profile.reason_suffix()
+                    ),
+                ))
+            }
+            _ => return Err(profile.unexpected(PROVIDER, checks[0])),
+        }
+
+        let scopes = profile
+            .headers
+            .get("x-oauth-scopes")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let scope_allows = scopes.as_deref().map(scopes_allow_create);
+
+        let grant_allows = if profile.body["restricted"].as_bool() == Some(true) {
+            checks.push("GET /profile/grants");
+            let grants = self.probe("/profile/grants").await?;
+            match grants.status {
+                // 204: the user turned out to be unrestricted after all.
+                StatusCode::NO_CONTENT => Some(true),
+                s if s.is_success() => grants.body["global"]["add_linodes"].as_bool(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => None,
+                _ => return Err(grants.unexpected(PROVIDER, "GET /profile/grants")),
+            }
+        } else if profile.body["restricted"].as_bool() == Some(false) {
+            Some(true)
+        } else {
+            None
+        };
+
+        let (capability, detail) = match (scope_allows, grant_allows) {
+            (Some(false), _) => (
+                Capability::No,
+                format!(
+                    "The token is valid but its scopes ({}) do not include `linodes:read_write`, so it cannot create instances. Create a personal access token with read/write access to Linodes.",
+                    scopes.as_deref().unwrap_or_default()
+                ),
+            ),
+            (_, Some(false)) => (
+                Capability::No,
+                "The token is valid but its user is restricted and lacks the `add_linodes` grant, so it cannot create instances. Ask an account administrator for that grant.".to_owned(),
+            ),
+            (Some(true), Some(true)) => (
+                Capability::Yes,
+                "The token is valid, its scopes allow read/write access to Linodes, and its user may add Linodes.".to_owned(),
+            ),
+            (None, _) => (
+                Capability::Unknown,
+                "The token is valid, but the response carried no `X-OAuth-Scopes` header, so its scopes could not be read.".to_owned(),
+            ),
+            (_, None) => (
+                Capability::Unknown,
+                "The token is valid and its scopes allow read/write access to Linodes, but the user's grants could not be read.".to_owned(),
+            ),
+        };
+        Ok(CredentialCheck::accepted(capability, &checks, detail))
     }
 
     async fn create_instance(&self, req: CreateInstance) -> Result<Instance> {

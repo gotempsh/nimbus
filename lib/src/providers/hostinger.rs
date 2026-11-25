@@ -28,9 +28,10 @@
 //!   match a known tier falls back to 0, same treatment as OVH's pending
 //!   `monthly_price`.
 
+use super::Probe;
 use crate::{
-    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
-    InstanceStatus, InstanceType, Network, Region, Result, Volume,
+    Capability, CloudProvider, CreateInstance, CreateNetwork, CreateVolume, CredentialCheck, Error,
+    Image, Instance, InstanceStatus, InstanceType, Network, Region, Result, Volume,
 };
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
@@ -99,6 +100,25 @@ impl Hostinger {
     async fn get(&self, path: &str) -> Result<Value> {
         self.request(reqwest::Method::GET, path, None).await
     }
+
+    /// A GET whose status and headers the caller inspects itself — used by
+    /// `check_credential`, where a refusal is a finding rather than an error.
+    async fn probe(&self, path: &str) -> Result<Probe> {
+        Probe::send(
+            self.client
+                .get(format!("{}{path}", self.base))
+                .bearer_auth(&self.token),
+        )
+        .await
+    }
+}
+
+/// A payment method a purchase without an explicit `payment_method_id`
+/// would be charged to.
+fn usable_default_payment_method(method: &Value) -> bool {
+    method["is_default"].as_bool() == Some(true)
+        && method["is_expired"].as_bool() != Some(true)
+        && method["is_suspended"].as_bool() != Some(true)
 }
 
 /// (vcpus, memory_gb, disk_gb) for a known Hostinger VPS plan tier, parsed
@@ -237,6 +257,56 @@ impl CloudProvider for Hostinger {
                 name: t["name"].as_str().unwrap_or_default().to_owned(),
             })
             .collect())
+    }
+
+    /// Hostinger tokens are not scoped — a token has "the same permissions
+    /// as the owning user" — so a valid token may purchase. What a purchase
+    /// then needs is a payment method to charge, which the billing API lists.
+    /// Nothing is ordered here: both calls are plain reads.
+    async fn check_credential(&self) -> Result<CredentialCheck> {
+        let mut checks = vec!["GET /vps/v1/virtual-machines"];
+        let vms = self.probe("/vps/v1/virtual-machines").await?;
+        match vms.status {
+            s if s.is_success() => {}
+            StatusCode::UNAUTHORIZED => {
+                return Ok(CredentialCheck::rejected(
+                    &checks,
+                    format!(
+                    "Hostinger rejected the token: it is invalid, expired or has been revoked{}.",
+                    vms.reason_suffix()
+                ),
+                ))
+            }
+            StatusCode::FORBIDDEN => {
+                return Ok(CredentialCheck::accepted(
+                    Capability::Unknown,
+                    &checks,
+                    format!(
+                        "The token is valid but was refused access to the VPS API{}.",
+                        vms.reason_suffix()
+                    ),
+                ))
+            }
+            _ => return Err(vms.unexpected(PROVIDER, checks[0])),
+        }
+
+        checks.push("GET /billing/v1/payment-methods");
+        let methods = self.probe("/billing/v1/payment-methods").await?;
+        let (capability, detail) = match methods.body.as_array() {
+            Some(methods) if methods.iter().any(usable_default_payment_method) => (
+                Capability::Yes,
+                "The token is valid (Hostinger tokens carry all of their user's permissions) and the account has a usable default payment method. Creating an instance is a real purchase charged to that method, and it cannot be deleted or refunded through the API; the charge itself can still be declined.",
+            ),
+            Some(_) => (
+                Capability::No,
+                "The token is valid, but the account has no default payment method that is neither expired nor suspended, so a purchase cannot be charged. Add or fix one in Hostinger's billing dashboard (hPanel).",
+            ),
+            None => (
+                Capability::Unknown,
+                "The token is valid, but the account's payment methods could not be read, so whether a purchase can be charged is unknown.",
+            ),
+        };
+        Ok(CredentialCheck::accepted(capability, &checks, detail))
     }
 
     async fn create_instance(&self, req: CreateInstance) -> Result<Instance> {

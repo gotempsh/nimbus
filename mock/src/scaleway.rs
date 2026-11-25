@@ -3,7 +3,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{delete, get, patch, post},
     Json, Router,
 };
@@ -135,8 +135,21 @@ async fn get_server(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-async fn list_servers(State(store): S) -> Json<Value> {
-    Json(json!({ "servers": store.servers.lock().unwrap().values().cloned().collect::<Vec<_>>() }))
+/// `no-access-token` is a valid key whose IAM policy grants nothing on
+/// Instances — the real API answers that with 403, not 401.
+async fn list_servers(
+    State(store): S,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if crate::header(&headers, "x-auth-token") == Some("no-access-token") {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "message": "insufficient permissions", "type": "permissions_denied" })),
+        ));
+    }
+    Ok(Json(
+        json!({ "servers": store.servers.lock().unwrap().values().cloned().collect::<Vec<_>>() }),
+    ))
 }
 
 async fn server_action(

@@ -1,9 +1,10 @@
 //! DigitalOcean adapter. API docs: https://docs.digitalocean.com/reference/api/
 //! Flat REST + bearer token, no request signing.
 
+use super::Probe;
 use crate::{
-    CloudProvider, CreateInstance, CreateNetwork, CreateVolume, Error, Image, Instance,
-    InstanceStatus, InstanceType, Network, Region, Result, Volume,
+    Capability, CloudProvider, CreateInstance, CreateNetwork, CreateVolume, CredentialCheck, Error,
+    Image, Instance, InstanceStatus, InstanceType, Network, Region, Result, Volume,
 };
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
@@ -74,6 +75,17 @@ impl DigitalOcean {
 
     async fn get(&self, path: &str) -> Result<Value> {
         self.request(reqwest::Method::GET, path, None).await
+    }
+
+    /// A GET whose status and headers the caller inspects itself — used by
+    /// `check_credential`, where a refusal is a finding rather than an error.
+    async fn probe(&self, path: &str) -> Result<Probe> {
+        Probe::send(
+            self.client
+                .get(format!("{}{path}", self.base))
+                .bearer_auth(&self.token),
+        )
+        .await
     }
 }
 
@@ -175,6 +187,63 @@ impl CloudProvider for DigitalOcean {
                 name: i["name"].as_str().unwrap_or_default().to_owned(),
             })
             .collect())
+    }
+
+    /// `GET /account` proves the token and reports the account's standing
+    /// (a locked account cannot create anything). What it cannot report is
+    /// the token's scopes: DigitalOcean shows those only in its control
+    /// panel, so a read-only or custom-scoped token looks the same here as a
+    /// full-access one.
+    async fn check_credential(&self) -> Result<CredentialCheck> {
+        let checks = ["GET /account"];
+        let probe = self.probe("/account").await?;
+        Ok(match probe.status {
+            s if s.is_success() => {
+                let account = &probe.body["account"];
+                let status = account["status"].as_str().unwrap_or("unknown");
+                let message = account["status_message"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|m| !m.is_empty())
+                    .map(|m| format!(" ({m})"))
+                    .unwrap_or_default();
+                if status == "locked" {
+                    CredentialCheck::accepted(
+                        Capability::No,
+                        &checks,
+                        format!("The token is valid but the DigitalOcean account is locked{message}, so it cannot create Droplets. Resolve the lock with DigitalOcean support or billing first."),
+                    )
+                } else if account["droplet_limit"].as_u64() == Some(0) {
+                    CredentialCheck::accepted(
+                        Capability::No,
+                        &checks,
+                        "The token is valid but the account's Droplet limit is 0, so it cannot create Droplets. Ask DigitalOcean to raise the limit.",
+                    )
+                } else {
+                    CredentialCheck::accepted(
+                        Capability::Unknown,
+                        &checks,
+                        format!("The token is valid and the account status is `{status}`{message}. DigitalOcean's API cannot report a token's scopes, so whether it may create Droplets (it needs write access: the `droplet:create` and `ssh_key:create` scopes) cannot be confirmed without creating one."),
+                    )
+                }
+            }
+            StatusCode::UNAUTHORIZED => CredentialCheck::rejected(
+                &checks,
+                format!(
+                    "DigitalOcean rejected the token: it is invalid, expired or has been revoked{}.",
+                    probe.reason_suffix()
+                ),
+            ),
+            StatusCode::FORBIDDEN => CredentialCheck::accepted(
+                Capability::Unknown,
+                &checks,
+                format!(
+                    "The token is valid but lacks the `account:read` scope, so the account's standing could not be read; its other scopes cannot be listed through the API either{}.",
+                    probe.reason_suffix()
+                ),
+            ),
+            _ => return Err(probe.unexpected(PROVIDER, checks[0])),
+        })
     }
 
     async fn create_instance(&self, req: CreateInstance) -> Result<Instance> {

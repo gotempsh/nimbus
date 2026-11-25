@@ -106,3 +106,56 @@ pub struct Network {
     pub region: String,
     pub ip_range: String,
 }
+
+/// A three-valued answer to "can this credential do X?".
+///
+/// `Unknown` is an answer, not a failure: several providers have no way to
+/// read a credential's permissions, and the only other way to find out would
+/// be to create something. Callers should treat it as "not ruled out".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    Yes,
+    No,
+    Unknown,
+}
+
+/// What [`CloudProvider::check_credential`](crate::CloudProvider::check_credential)
+/// could establish about a credential using read-only calls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialCheck {
+    /// The provider accepted the credential on an endpoint that requires one.
+    pub authenticated: bool,
+    /// Whether the credential can create instances, as far as the provider's
+    /// API lets that be determined without creating anything.
+    pub can_create_instances: Capability,
+    /// The read-only requests the answer is based on, e.g. `"GET /account"`.
+    pub checks: Vec<String>,
+    /// What was found and why, including what could not be determined.
+    /// Never contains the credential.
+    pub detail: String,
+}
+
+impl CredentialCheck {
+    pub(crate) fn rejected(checks: &[&str], detail: impl Into<String>) -> Self {
+        Self {
+            authenticated: false,
+            can_create_instances: Capability::No,
+            checks: checks.iter().map(|c| (*c).to_owned()).collect(),
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn accepted(
+        can_create_instances: Capability,
+        checks: &[&str],
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            authenticated: true,
+            can_create_instances,
+            checks: checks.iter().map(|c| (*c).to_owned()).collect(),
+            detail: detail.into(),
+        }
+    }
+}

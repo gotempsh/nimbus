@@ -2,7 +2,8 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -38,6 +39,8 @@ pub fn router(recorder: crate::Recorder) -> Router {
         ..Store::default()
     });
     Router::new()
+        .route("/v4/profile", get(profile))
+        .route("/v4/profile/grants", get(grants))
         .route("/v4/regions", get(regions))
         .route("/v4/linode/types", get(types))
         .route("/v4/images", get(images))
@@ -56,6 +59,49 @@ pub fn router(recorder: crate::Recorder) -> Router {
         .route("/v4/vpcs", post(create_vpc).get(list_vpcs))
         .route("/v4/vpcs/{id}", delete(delete_vpc))
         .with_state(store)
+}
+
+/// A user whose token is fine but who was never granted `add_linodes`.
+const RESTRICTED_TOKEN: &str = "restricted-token";
+
+/// Like the real API, reports the token's own scopes in `X-OAuth-Scopes`
+/// (`*` is full access).
+async fn profile(headers: HeaderMap) -> Response {
+    let token = crate::bearer(&headers);
+    let scopes = if token == Some(crate::READ_ONLY_TOKEN) {
+        "account:read_only linodes:read_only"
+    } else {
+        "*"
+    };
+    (
+        [("X-OAuth-Scopes", scopes)],
+        Json(json!({
+            "uid": 1234,
+            "username": "example-user",
+            "email": "admin@example.com",
+            "restricted": token == Some(RESTRICTED_TOKEN),
+            "timezone": "UTC",
+            "two_factor_auth": true,
+        })),
+    )
+        .into_response()
+}
+
+/// 204 for unrestricted users, who have every grant.
+async fn grants(headers: HeaderMap) -> Response {
+    if crate::bearer(&headers) != Some(RESTRICTED_TOKEN) {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    Json(json!({
+        "global": {
+            "account_access": null,
+            "add_linodes": false,
+            "add_volumes": false,
+            "add_vpcs": false,
+        },
+        "linode": [],
+    }))
+    .into_response()
 }
 
 async fn regions() -> Json<Value> {

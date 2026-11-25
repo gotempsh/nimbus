@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -27,6 +27,7 @@ pub fn router(recorder: crate::Recorder) -> Router {
         ..Store::default()
     });
     Router::new()
+        .route("/v2/account", get(account))
         .route("/v2/regions", get(regions))
         .route("/v2/regions/{id}/availability", get(availability))
         .route("/v2/plans", get(plans))
@@ -44,6 +45,31 @@ pub fn router(recorder: crate::Recorder) -> Router {
         .route("/v2/vpcs", post(create_vpc).get(list_vpcs))
         .route("/v2/vpcs/{id}", delete(delete_vpc))
         .with_state(store)
+}
+
+/// The permissions (`acls`) belong to the user the API key was issued for;
+/// `provisioning` is "Deploy New Servers".
+async fn account(headers: HeaderMap) -> Json<Value> {
+    let acls = if crate::bearer(&headers) == Some(crate::READ_ONLY_TOKEN) {
+        json!(["subscriptions_view", "support"])
+    } else {
+        json!([
+            "subscriptions_view",
+            "subscriptions",
+            "provisioning",
+            "billing",
+            "support"
+        ])
+    };
+    Json(json!({ "account": {
+        "name": "Example Account",
+        "email": "admin@example.com",
+        "acls": acls,
+        "balance": -100.0,
+        "pending_charges": 5.0,
+        "last_payment_date": "2026-01-01T00:00:00+00:00",
+        "last_payment_amount": -100.0,
+    }}))
 }
 
 async fn regions() -> Json<Value> {
