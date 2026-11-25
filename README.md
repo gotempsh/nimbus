@@ -78,9 +78,9 @@ install -m 0755 nimbus ~/.local/bin/nimbus          # or any directory on PATH
 nimbus --version
 ```
 
-If the [releases page](https://github.com/gotempsh/nimbus/releases) is
-empty, no release has been published yet — build from source instead (needs
-a Rust toolchain):
+Every release is listed on the
+[releases page](https://github.com/gotempsh/nimbus/releases). To build from
+source instead (needs a Rust toolchain):
 
 ```bash
 git clone https://github.com/gotempsh/nimbus && cd nimbus
@@ -369,7 +369,7 @@ live provider accounts yet — treat as unverified until that happens. That
 includes `verify`: which call proves what was worked out from each
 provider's API documentation and is tested against the mock only.
 
-The CLI can be installed from a release binary (once a version is tagged),
+The CLI can be installed from a release binary,
 stores credentials outside the environment (`login`/`logout`), checks them
 (`verify`), describes every provider and its caveats as data (`providers`),
 and passes a first-boot script (`--user-data-file`) to every provider except

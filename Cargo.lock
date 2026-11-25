@@ -1220,7 +1220,7 @@ dependencies = [
 
 [[package]]
 name = "nimbus"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "clap",
@@ -1237,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "nimbus-cloud"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "nimbus-mock"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "base64",
